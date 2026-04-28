@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^\\$old='c:\\\\Users\\\\chunwol\\\\Downloads\\\\자동화'; \\$new='c:\\\\Users\\\\chunwol\\\\Downloads\\\\office-automation'; if \\(!\\(Test-Path \\$old\\)\\) \\{ Write-Output 'OLD_PATH_NOT_FOUND'; exit 1 \\}; if \\(Test-Path \\$new\\) \\{ Write-Output 'NEW_PATH_ALREADY_EXISTS'; exit 1 \\}; Set-Location 'c:\\\\Users\\\\chunwol\\\\Downloads'; Rename-Item -Path \\$old -NewName 'office-automation'; Set-Location \\$new; git --no-pager status -sb; git remote -v$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
