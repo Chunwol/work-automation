@@ -2,3 +2,4 @@
 users/*.json
 !users/*.json.example
 node_modules/
+.vscode/
