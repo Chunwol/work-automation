@@ -200,30 +200,49 @@ async function clickButtonByText(page, text) {
     }, text);
 }
 
-async function setInputValueAndVerify(page, selector, value) {
-    const expected = String(value || '').replace(/\D/g, '');
-    const result = await page.evaluate((targetSelector, targetValue, expectedDigits) => {
-        const el = document.querySelector(targetSelector);
-        if (!el) return { ok: false, actual: '' };
+async function typeFieldWithRetryAndVerify(page, selector, value, attempts, normalize) {
+    const typedValue = String(value || '');
+    const expected = normalize(typedValue);
+    const modifierKey = process.platform === 'darwin' ? 'Meta' : 'Control';
+    let lastActual = '';
 
-        el.focus();
-        const proto = Object.getPrototypeOf(el);
-        const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (valueSetter) {
-            valueSetter.call(el, targetValue);
-        } else {
-            el.value = targetValue;
+    for (const attempt of attempts) {
+        const input = await page.$(selector);
+        if (!input) return { ok: false, actual: '', reason: '필드 없음' };
+
+        await input.click({ clickCount: 4 });
+        await page.keyboard.down(modifierKey);
+        await page.keyboard.press('KeyA');
+        await page.keyboard.up(modifierKey);
+        await page.keyboard.press('Backspace');
+        await new Promise(r => setTimeout(r, 120));
+
+        for (const ch of typedValue) {
+            await page.keyboard.type(ch, { delay: attempt.keyDelay });
+            await new Promise(r => setTimeout(r, attempt.betweenDelay));
         }
 
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.blur();
+        await page.evaluate((targetSelector) => {
+            const el = document.querySelector(targetSelector);
+            if (!el) return;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.blur();
+        }, selector);
+        await new Promise(r => setTimeout(r, attempt.afterDelay));
 
-        const actualDigits = String(el.value || '').replace(/\D/g, '');
-        return { ok: actualDigits === expectedDigits, actual: actualDigits };
-    }, selector, String(value || ''), expected);
+        const actualRaw = await page.evaluate((targetSelector) => {
+            const el = document.querySelector(targetSelector);
+            return String(el?.value || '');
+        }, selector);
+        lastActual = normalize(actualRaw);
 
-    return result;
+        if (lastActual === expected) {
+            return { ok: true, actual: lastActual };
+        }
+    }
+
+    return { ok: false, actual: lastActual };
 }
 
 function normalizePortalDateToYmd(text) {
@@ -535,41 +554,64 @@ async function selectRowsForDelete(page, keysToDelete) {
             await page.click(SELECTORS.btnNew);
             await new Promise(r => setTimeout(r, 400));
 
-            const dateSetResult = await setInputValueAndVerify(page, SELECTORS.inputDate, log.date);
+            const normalizeDigits = (text) => String(text || '').replace(/\D/g, '');
+            const normalizeText = (text) => String(text || '').trim();
+
+            const dateSetResult = await typeFieldWithRetryAndVerify(
+                page,
+                SELECTORS.inputDate,
+                log.date,
+                [
+                    { keyDelay: 250, betweenDelay: 80, afterDelay: 200 },
+                    { keyDelay: 380, betweenDelay: 120, afterDelay: 260 },
+                    { keyDelay: 450, betweenDelay: 140, afterDelay: 320 }
+                ],
+                normalizeDigits
+            );
             if (!dateSetResult.ok) {
                 throw new Error(`일자 입력 불일치(기대: ${log.date}, 실제: ${dateSetResult.actual || '없음'})`);
             }
 
-            const startInput = await page.$(SELECTORS.inputStart);
-            if (startInput) {
-                await startInput.click({ clickCount: 4 });
-                await page.keyboard.press('Backspace');
-                await new Promise(r => setTimeout(r, 100));
-                await page.keyboard.type(log.start, { delay: 300 }); // 4자리 시간 입력 천천히
+            const startSetResult = await typeFieldWithRetryAndVerify(
+                page,
+                SELECTORS.inputStart,
+                log.start,
+                [
+                    { keyDelay: 220, betweenDelay: 70, afterDelay: 180 },
+                    { keyDelay: 320, betweenDelay: 100, afterDelay: 240 }
+                ],
+                normalizeDigits
+            );
+            if (!startSetResult.ok) {
+                throw new Error(`시작시간 입력 불일치(기대: ${log.start}, 실제: ${startSetResult.actual || '없음'})`);
             }
 
-            const endInput = await page.$(SELECTORS.inputEnd);
-            if (endInput) {
-                await endInput.click({ clickCount: 4 });
-                await page.keyboard.press('Backspace');
-                await new Promise(r => setTimeout(r, 100));
-                await page.keyboard.type(log.end, { delay: 300 }); // 4자리 시간 입력 천천히
+            const endSetResult = await typeFieldWithRetryAndVerify(
+                page,
+                SELECTORS.inputEnd,
+                log.end,
+                [
+                    { keyDelay: 220, betweenDelay: 70, afterDelay: 180 },
+                    { keyDelay: 320, betweenDelay: 100, afterDelay: 240 }
+                ],
+                normalizeDigits
+            );
+            if (!endSetResult.ok) {
+                throw new Error(`종료시간 입력 불일치(기대: ${log.end}, 실제: ${endSetResult.actual || '없음'})`);
             }
 
-            const contentInput = await page.$(SELECTORS.inputContent);
-            if (contentInput) {
-                await contentInput.click();
-                await page.keyboard.type(SCHEDULE_INFO.content, { delay: 80 });
-                // 포털 폼이 input/change 이벤트로만 값을 반영하는 경우 대비
-                await page.evaluate((selector) => {
-                    const el = document.querySelector(selector);
-                    if (el) {
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                        el.blur();
-                    }
-                }, SELECTORS.inputContent);
-                await new Promise(r => setTimeout(r, 400));
+            const contentSetResult = await typeFieldWithRetryAndVerify(
+                page,
+                SELECTORS.inputContent,
+                SCHEDULE_INFO.content,
+                [
+                    { keyDelay: 80, betweenDelay: 15, afterDelay: 220 },
+                    { keyDelay: 120, betweenDelay: 25, afterDelay: 280 }
+                ],
+                normalizeText
+            );
+            if (!contentSetResult.ok) {
+                throw new Error(`근무내용 입력 불일치(기대: ${normalizeText(SCHEDULE_INFO.content)}, 실제: ${contentSetResult.actual || '없음'})`);
             }
 
             console.log('💾 저장!');
