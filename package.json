@@ -4,12 +4,10 @@
   "description": "사무실 자동화 스크립트",
   "main": "시간표.js",
   "scripts": {
-    "start": "node 시간표.js"
+    "start": "node \"시간표.js\""
   },
   "dependencies": {
-    "node-global-key-listener": "^0.2.0",
     "puppeteer": "^21.0.0",
-    "readline-sync": "^1.4.10",
-    "robotjs": "^0.6.0"
+    "readline-sync": "^1.4.10"
   }
 }

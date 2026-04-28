@@ -14,7 +14,7 @@
 
 ## 2. 실행 환경
 
-- Windows 권장
+- Windows / macOS
 - Node.js 18 이상 권장
 - npm
 - 크롬(또는 Chromium 실행 가능 환경)
@@ -30,8 +30,14 @@ npm install
 
 예시 파일을 복사해 본인 파일을 생성하세요.
 
+Windows:
 ```powershell
 Copy-Item .\users\사용자명.json.example .\users\내이름.json
+```
+
+macOS:
+```bash
+cp ./users/사용자명.json.example ./users/내이름.json
 ```
 
 `users\내이름.json`에서 아래 항목을 수정합니다.
