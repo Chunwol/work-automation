@@ -200,6 +200,32 @@ async function clickButtonByText(page, text) {
     }, text);
 }
 
+async function setInputValueAndVerify(page, selector, value) {
+    const expected = String(value || '').replace(/\D/g, '');
+    const result = await page.evaluate((targetSelector, targetValue, expectedDigits) => {
+        const el = document.querySelector(targetSelector);
+        if (!el) return { ok: false, actual: '' };
+
+        el.focus();
+        const proto = Object.getPrototypeOf(el);
+        const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (valueSetter) {
+            valueSetter.call(el, targetValue);
+        } else {
+            el.value = targetValue;
+        }
+
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.blur();
+
+        const actualDigits = String(el.value || '').replace(/\D/g, '');
+        return { ok: actualDigits === expectedDigits, actual: actualDigits };
+    }, selector, String(value || ''), expected);
+
+    return result;
+}
+
 function normalizePortalDateToYmd(text) {
     const raw = String(text || '').trim();
     if (!raw) return '';
@@ -509,11 +535,9 @@ async function selectRowsForDelete(page, keysToDelete) {
             await page.click(SELECTORS.btnNew);
             await new Promise(r => setTimeout(r, 400));
 
-            const dateInput = await page.$(SELECTORS.inputDate);
-            if (dateInput) {
-                await dateInput.click({ clickCount: 3 });
-                await page.keyboard.press('Backspace');
-                await page.keyboard.type(log.date, { delay: 100 });
+            const dateSetResult = await setInputValueAndVerify(page, SELECTORS.inputDate, log.date);
+            if (!dateSetResult.ok) {
+                throw new Error(`일자 입력 불일치(기대: ${log.date}, 실제: ${dateSetResult.actual || '없음'})`);
             }
 
             const startInput = await page.$(SELECTORS.inputStart);
