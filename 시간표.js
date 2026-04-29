@@ -62,34 +62,149 @@ const VACATION_DATES = userConfig.vacationDates || [];
 const SCHEDULE_INFO = userConfig.schedule || { year: 2026, month: 1, content: '실습실 점검' };
 const CLEANUP_UNEXPECTED_ROWS = Boolean(userConfig.cleanupUnexpectedRows);
 
-const HOLIDAY_API_BASE_URL = 'https://date.nager.at/api/v3/PublicHolidays';
-const HOLIDAY_COUNTRY_CODE = 'KR';
+const EXTRA_HOLIDAY_DATES = userConfig.extraHolidayDates || [];
+
+async function fetchGoogleIcsHolidayDays(year, month) {
+    // Google Public Holidays (South Korea) - keyless ICS
+    const icsUrl = 'https://calendar.google.com/calendar/ical/ko.south_korea%23holiday%40group.v.calendar.google.com/public/basic.ics';
+    const res = await fetch(icsUrl, { headers: { 'User-Agent': 'work-log-automation/1.0' } });
+    if (!res.ok) throw new Error(`Google ICS HTTP ${res.status}`);
+    const ics = await res.text();
+
+    const monthText = String(month).padStart(2, '0');
+    const daySet = new Set();
+
+    // Google 한국 휴일 캘린더에는 기념일도 포함되므로
+    // DESCRIPTION에 '공휴일'이 명시된 일정만 반영한다.
+    const blocks = ics.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
+
+    const unfoldIcsLines = (text) => String(text || '').replace(/\r?\n[ \t]/g, '');
+
+    for (const block of blocks) {
+        const unfolded = unfoldIcsLines(block);
+        const dateMatch = unfolded.match(/DTSTART(?:;VALUE=DATE)?:?(\d{8})/);
+        if (!dateMatch) continue;
+        const d = dateMatch[1];
+        if (!d.startsWith(String(year))) continue;
+        if (d.slice(4, 6) !== monthText) continue;
+
+        const descriptionRaw = (unfolded.match(/DESCRIPTION:([^\r\n]*)/) || [])[1] || '';
+        const description = descriptionRaw.replace(/\\,/g, ',').replace(/\\n/g, ' ').trim();
+        if (!description.includes('공휴일')) continue;
+
+        const day = Number(d.slice(6, 8));
+        if (Number.isInteger(day)) daySet.add(day);
+    }
+
+    return daySet;
+}
+
+async function fetchDongyangAcademicHolidays(year, month) {
+    // 동양대 학사일정 공개 페이지에서 '개교기념일'/'보강일' 날짜를 추출
+    const url = 'https://www.dongyang.ac.kr/dmu/4749/subview.do';
+    try {
+        const res = await fetch(url, { headers: { 'User-Agent': 'work-log-automation/1.0' } });
+        if (!res.ok) throw new Error(`Dongyang HTTP ${res.status}`);
+        const html = await res.text();
+
+        const daySet = new Set();
+        const monthText = String(month).padStart(2, '0');
+
+        const normalizeMonth = (m) => String(Number(m || 0)).padStart(2, '0');
+        const addIfTargetMonth = (m, d) => {
+            const mm = normalizeMonth(m);
+            const dd = Number(d);
+            if (mm === monthText && Number.isInteger(dd) && dd >= 1 && dd <= 31) {
+                daySet.add(dd);
+            }
+        };
+
+        // 1) 휴강일 표기: "05.20 ... =>/⇒ 보강일" 패턴의 원 날짜를 제외 대상으로 추가
+        for (const m of html.matchAll(/(\d{2})\.(\d{2})[\s\S]{0,200}?(?:=>|⇒)\s*보강일/g)) {
+            addIfTargetMonth(m[1], m[2]);
+        }
+
+        // 2) 보강 안내의 원 날짜 표기: "... [5/20(수)]" 에서 괄호 안 날짜를 제외 대상으로 추가
+        // 예: "보강일: 개교기념일[5/20(수)] 보강일" -> 5/20 제외
+        for (const m of html.matchAll(/\[(\d{1,2})\s*\/(\d{1,2})(?:\([^\]]*\))?\]/g)) {
+            addIfTargetMonth(m[1], m[2]);
+        }
+
+        return daySet;
+    } catch (e) {
+        console.warn('⚠️ 동양대 학사일정 파싱 실패:', e.message);
+        return new Set();
+    }
+}
 
 async function fetchPublicHolidayDays(year, month) {
     const monthText = String(month).padStart(2, '0');
-    const url = `${HOLIDAY_API_BASE_URL}/${year}/${HOLIDAY_COUNTRY_CODE}`;
-    const response = await fetch(url, {
-        headers: {
-            'User-Agent': 'work-log-automation/1.0'
+    let daySet = new Set();
+
+    // 1) Google ICS 우선 (keyless)
+    try {
+        const icsSet = await fetchGoogleIcsHolidayDays(year, month);
+        if (icsSet && icsSet.size > 0) {
+            daySet = new Set([...daySet, ...icsSet]);
+            console.log(`🎌 공휴일(Google ICS) 로드 완료: ${year}-${monthText} (${daySet.size}일)`);
         }
-    });
-
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+    } catch (e) {
+        console.warn(`⚠️ Google ICS 조회 실패: ${e.message}`);
     }
 
-    const holidays = await response.json();
-    if (!Array.isArray(holidays)) {
-        throw new Error('응답 형식 오류');
+    // 2) 동양대 학사일정에서 반드시 제외할 날짜 추가
+    try {
+        const dmuSet = await fetchDongyangAcademicHolidays(year, month);
+        for (const d of dmuSet) daySet.add(d);
+        if (dmuSet.size > 0) {
+            console.log(`🏫 동양대 학사일정 반영(제외): ${[...dmuSet].sort((a, b) => a - b).join(',')}`);
+        } else {
+            console.log('🏫 동양대 학사일정 반영(제외): 없음');
+        }
+    } catch (e) {
+        console.warn('⚠️ 동양대 학사일정 통합 실패:', e.message);
     }
 
-    const days = holidays
-        .map(item => String(item?.date || ''))
-        .filter(date => date.startsWith(`${year}-${monthText}-`))
-        .map(date => Number(date.slice(8, 10)))
-        .filter(day => Number.isInteger(day));
+    // 3) 설정의 추가 공휴일(수동) 반영
+    for (const day of EXTRA_HOLIDAY_DATES) {
+        if (Number.isInteger(day) && day >= 1 && day <= 31) {
+            daySet.add(day);
+        }
+    }
 
-    return new Set(days);
+    return daySet;
+}
+
+function calculateTotalWorkMinutes(logs) {
+    let totalMinutes = 0;
+
+    for (const log of logs) {
+        const startDigits = String(log.start || '').replace(/\D/g, '');
+        const endDigits = String(log.end || '').replace(/\D/g, '');
+        if (startDigits.length < 4 || endDigits.length < 4) continue;
+
+        const startHour = Number(startDigits.slice(0, 2));
+        const startMinute = Number(startDigits.slice(2, 4));
+        const endHour = Number(endDigits.slice(0, 2));
+        const endMinute = Number(endDigits.slice(2, 4));
+
+        const startTotal = startHour * 60 + startMinute;
+        const endTotal = endHour * 60 + endMinute;
+
+        if (Number.isNaN(startTotal) || Number.isNaN(endTotal) || endTotal <= startTotal) {
+            continue;
+        }
+
+        totalMinutes += (endTotal - startTotal);
+    }
+
+    return totalMinutes;
+}
+
+function formatMinutesToHourText(totalMinutes) {
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `${hours}시간 ${minutes}분`;
 }
 
 // ==========================================
@@ -345,14 +460,15 @@ async function selectRowsForDelete(page, keysToDelete) {
     let publicHolidayDays;
     try {
         publicHolidayDays = await fetchPublicHolidayDays(SCHEDULE_INFO.year, SCHEDULE_INFO.month);
-        console.log(`🎌 공휴일 API 로드 완료: ${SCHEDULE_INFO.year}-${String(SCHEDULE_INFO.month).padStart(2, '0')} (${publicHolidayDays.size}일)`);
     } catch (e) {
         console.error(`❌ 공휴일 API 조회 실패: ${e.message}`);
         process.exit(1);
     }
 
     const workLogs = generateSchedule(publicHolidayDays);
+    const totalWorkMinutes = calculateTotalWorkMinutes(workLogs);
     console.log(`📅 설정된 규칙에 따라 ${workLogs.length}개의 일정을 생성했습니다.`);
+    console.log(`⏱️ 전체 시수: ${formatMinutesToHourText(totalWorkMinutes)} (총 ${totalWorkMinutes}분)`);
     console.table(workLogs);
 
     const browser = await puppeteer.launch({
@@ -541,11 +657,13 @@ async function selectRowsForDelete(page, keysToDelete) {
     }
 
     const logsToInsert = workLogs.filter(log => !existingKeysAfterCleanup.has(buildLogKey(log.date, log.start, log.end)));
+    const insertWorkMinutes = calculateTotalWorkMinutes(logsToInsert);
     const skippedCount = workLogs.length - logsToInsert.length;
     if (skippedCount > 0) {
         console.log(`⏭️  기존 동일 일정 ${skippedCount}건은 건너뜁니다.`);
     }
     console.log(`📝 신규 입력 대상: ${logsToInsert.length}건`);
+    console.log(`⏱️ 신규 입력 시수: ${formatMinutesToHourText(insertWorkMinutes)} (총 ${insertWorkMinutes}분)`);
 
     for (const log of logsToInsert) {
         try {
