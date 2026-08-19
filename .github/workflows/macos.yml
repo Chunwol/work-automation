@@ -1,0 +1,23 @@
+name: Browser compatibility
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  browser-smoke-test:
+    strategy:
+      matrix:
+        os:
+          - macos-15-intel
+          - macos-14
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 18
+          cache: npm
+      - run: npm ci
+      - run: npm run check:browser

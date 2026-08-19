@@ -471,10 +471,11 @@ async function selectRowsForDelete(page, keysToDelete) {
     console.log(`⏱️ 전체 시수: ${formatMinutesToHourText(totalWorkMinutes)} (총 ${totalWorkMinutes}분)`);
     console.table(workLogs);
 
+    const browserArgs = process.platform === 'darwin' ? [] : ['--start-maximized'];
     const browser = await puppeteer.launch({
         headless: false,
         defaultViewport: null,
-        args: ['--start-maximized']
+        args: browserArgs
     });
     const page = await browser.newPage();
 
