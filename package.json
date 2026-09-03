@@ -4,10 +4,12 @@
   "description": "사무실 자동화 스크립트",
   "main": "시간표.js",
   "scripts": {
-    "start": "node \"시간표.js\""
+    "start": "node \"시간표.js\"",
+    "check:browser": "node scripts/check-browser.js",
+    "check:macos": "npm run check:browser"
   },
   "dependencies": {
-    "puppeteer": "^21.0.0",
+    "puppeteer": "^24.43.1",
     "readline-sync": "^1.4.10"
   }
 }
