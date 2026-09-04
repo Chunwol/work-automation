@@ -16,6 +16,8 @@ PC accounts, schedules, credentials and screenshots are never uploaded.
 - `backups`: original NAS configuration retained for recovery.
 - Container `work-automation`: non-root, read-only image, dropped capabilities,
   512 MB / one CPU limit, localhost-only port 3211. Native nginx terminates TLS.
+This NAS kernel does not support CPU quota or PID-count cgroups. CPU affinity and
+shares are used instead; the compose PID limit is best-effort and is not enforced here.
 
 Back up the database **and** encryption key securely, separately from Git.
 Do not copy an active SQLite database without its WAL: use SQLite's backup API.
@@ -41,6 +43,8 @@ Creating `/volume1/work-automation/.auto-deploy-paused` pauses the updater; remo
 that file resumes it. Use this before a manual rollback or maintenance.
 Kernel file locks prevent overlapping deployments and renewals, and are released
 automatically when a process exits or the NAS restarts.
+The next poll also clears a stale API maintenance pause left by an interrupted
+deployment, but never while another deployment holds its exclusive lock.
 
 Before replacement, new API writes are briefly paused and existing portal jobs must
 finish. If work stays active, deployment is deferred without stopping the container.

@@ -10,6 +10,12 @@ cd "$base"
 [ ! -f .auto-deploy-paused ] || exit 0
 exec 9> .poll.lock
 flock -n 9 || exit 0
+# A killed deploy process cannot run its EXIT cleanup. Only clear its pause
+# while holding the same lock used by manual and scheduled deployments.
+(
+    flock -n 8 || exit 0
+    rm -f "$base/data/.deployment-pause"
+) 8> .deploy.lock
 mkdir -p registry-anonymous
 export DOCKER_CONFIG="$base/registry-anonymous"
 # Only this repository's tested main-branch images receive the latest tag.
