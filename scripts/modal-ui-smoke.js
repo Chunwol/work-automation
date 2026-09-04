@@ -69,6 +69,8 @@ async function main() {
         for (let index = 0; index < 4 && await page.$('dialog[open]'); index += 1) await page.keyboard.press('Escape');
         await page.waitForFunction(() => !document.querySelector('dialog[open]') && pendingConfirmation === null);
     };
+    const waitForConfirmationClosed = () => page.waitForFunction(() =>
+        !document.querySelector('#action-confirm-dialog').open && pendingConfirmation === null);
     const inspect = async id => {
         await page.waitForSelector(`#${id}[open]`);
         await page.$eval(`#${id}`, async el => { await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished)); });
@@ -158,7 +160,7 @@ async function main() {
         await page.waitForSelector('#action-confirm-dialog[open]');
         assert.equal(await page.evaluate(() => document.activeElement.id), 'action-confirm-cancel');
         await page.keyboard.press('Enter');
-        await page.waitForSelector('#action-confirm-dialog:not([open])');
+        await waitForConfirmationClosed();
         assert.equal(await page.$eval('[data-day="1"]', el => el.classList.contains('work-day')), true);
         assert.equal(await page.$eval('#day-dialog', el => el.open), true);
         await closeAll();
@@ -166,18 +168,20 @@ async function main() {
         await page.waitForSelector('#action-confirm-dialog[open]');
         await page.evaluate(() => { state.schedule.specialDates['15'] = { start: '1300', end: '1500' }; });
         await click('#action-confirm-submit');
-        await page.waitForSelector('#action-confirm-dialog:not([open])');
+        await waitForConfirmationClosed();
         assert.deepEqual(await page.evaluate(() => state.schedule.specialDates['15']), { start: '1300', end: '1500' });
         phase = 'confirmation text escaping';
         await page.evaluate(() => { void confirmAction({ title: 'Test', message: '<img src=x onerror=alert(1)>', details: ['<script>alert(1)</script>'] }); });
         await page.waitForSelector('#action-confirm-dialog[open]');
         assert.equal(await page.$('#action-confirm-dialog img, #action-confirm-dialog script'), null);
         await page.keyboard.press('Escape');
+        await waitForConfirmationClosed();
         phase = 'credential deletion modal';
         await click('#portal-settings-button');
         await click('#delete-portal-button');
         await page.waitForSelector('#action-confirm-dialog[open]');
         await click('#action-confirm-cancel');
+        await waitForConfirmationClosed();
         assert.ok(runtime.db.getPortalCredential(userId));
         await click('#delete-portal-button');
         await page.waitForSelector('#action-confirm-dialog[open]');
