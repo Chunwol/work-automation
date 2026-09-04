@@ -15,6 +15,7 @@ cd "$base"
 mkdir .deploy-lock || { printf 'A deployment is already running.\n' >&2; exit 75; }
 registry=''
 cleanup() {
+    rm -f "$base/data/.deployment-pause"
     if [ -n "$registry" ]; then
         rm -f "$registry/config.json"
         rmdir "$registry" 2>/dev/null || true
@@ -24,15 +25,24 @@ cleanup() {
 trap cleanup EXIT
 registry=$(mktemp -d "$base/.registry.XXXXXX")
 export DOCKER_CONFIG="$registry"
-IFS= read -r token
-[ -n "$token" ] || exit 77
-printf '%s\n' "$token" | docker login ghcr.io --username Chunwol --password-stdin
-unset token
 docker pull "$image"
 
 previous=''
 if [ -f current-image ]; then previous=$(cat current-image); fi
 if [ "$(docker inspect --format '{{.State.Running}}' work-automation 2>/dev/null || true)" = true ]; then
+    touch "$base/data/.deployment-pause"
+    idle=false
+    for attempt in $(seq 1 60); do
+        if docker exec work-automation node -e '
+            fetch("http://127.0.0.1:3210/internal/deployment")
+              .then(async r => { if (!r.ok || (await r.json()).busy) process.exit(1); })
+              .catch(() => process.exit(1));'; then idle=true; break; fi
+        sleep 2
+    done
+    if [ "$idle" != true ]; then
+        printf 'Portal work is still running; keeping the current service.\n' >&2
+        exit 75
+    fi
     docker exec work-automation node -e '
         const fs = require("node:fs");
         const Database = require("better-sqlite3");

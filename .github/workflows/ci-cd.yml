@@ -56,6 +56,7 @@ jobs:
       digest: ${{ steps.publish.outputs.digest }}
     env:
       IMAGE: ghcr.io/chunwol/work-automation
+      DEPLOY_ENABLED: ${{ vars.NAS_DEPLOY_ENABLED }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -66,6 +67,7 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
+          build-args: APP_REVISION=${{ github.sha }}
           tags: ghcr.io/chunwol/work-automation:${{ github.sha }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
@@ -113,8 +115,10 @@ jobs:
         run: |
           set -euo pipefail
           docker push "$IMAGE:$GITHUB_SHA"
-          docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:latest"
-          docker push "$IMAGE:latest"
+          if [ "$DEPLOY_ENABLED" = true ]; then
+            docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
           ref=$(docker image inspect "$IMAGE:$GITHUB_SHA" --format '{{index .RepoDigests 0}}')
           echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
 
@@ -124,29 +128,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
-    permissions:
-      packages: read
     env:
-      NAS_HOST: ${{ vars.NAS_HOST }}
-      NAS_USER: ${{ vars.NAS_USER }}
-      DEPLOY_KEY: ${{ secrets.NAS_DEPLOY_KEY }}
-      KNOWN_HOSTS: ${{ secrets.NAS_KNOWN_HOSTS }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+      EXPECTED_REVISION: ${{ github.sha }}
     steps:
-      - name: Deploy only this service over a restricted SSH key
+      - name: Wait for the NAS outbound updater and verify the exact public revision
         shell: bash
         run: |
           set -euo pipefail
-          umask 077
-          temp=$(mktemp -d)
-          trap 'rm -rf "$temp"' EXIT
-          printf '%s\n' "$DEPLOY_KEY" > "$temp/key"
-          printf '%s\n' "$KNOWN_HOSTS" > "$temp/known_hosts"
-          printf '%s\n' "$GH_TOKEN" | ssh -T -i "$temp/key" \
-            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$temp/known_hosts" -o ConnectTimeout=20 \
-            -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
-            "$NAS_USER@$NAS_HOST" "deploy $IMAGE_DIGEST"
-      - name: Verify public HTTPS endpoint
-        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 https://work.pelmon.kro.kr/health
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+              https://work.pelmon.kro.kr/health | \
+              jq -e --arg revision "$EXPECTED_REVISION" '.ok == true and .revision == $revision'; then
+              echo "Verified the deployed revision over HTTPS."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'The NAS has not reported the expected revision. Check its deployment log.' >&2
+          exit 1

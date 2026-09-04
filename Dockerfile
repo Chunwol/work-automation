@@ -6,9 +6,11 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 FROM node:24-alpine
+ARG APP_REVISION=development
 LABEL org.opencontainers.image.source="https://github.com/Chunwol/work-automation"
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3210 DATA_DIR=/data TZ=Asia/Seoul
+ENV APP_REVISION=${APP_REVISION}
 RUN apk add --no-cache tini tzdata && mkdir /data && chown node:node /data
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json ./

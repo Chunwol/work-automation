@@ -25,27 +25,31 @@ according to the operator's policy.
 ## CI/CD
 
 `main` push -> unit/API and synthetic browser tests -> production image smoke test
--> GHCR immutable digest -> restricted SSH deployment -> health check -> public HTTPS.
+-> GHCR immutable digest -> NAS outbound pull -> health check -> exact revision over HTTPS.
 The server never receives a school account during deployment or testing.
 
-Repository variables: `NAS_HOST`, `NAS_USER`, `NAS_DEPLOY_ENABLED=true`.
-Repository secrets: `NAS_DEPLOY_KEY`, `NAS_KNOWN_HOSTS` (verified host key, not blind keyscan).
-Protect `main` and the `production` environment when adding repository writers.
+Repository variable: `NAS_DEPLOY_ENABLED=true` publishes the tested `latest` tag.
+The production environment allows only `main`. Protect `main` when adding repository writers.
 
-The dedicated SSH key can execute only `ping` or `deploy sha256:<64 hex>`.
-The root-owned deployment script accepts only this repository's image digest.
-GHCR authentication uses the workflow's short-lived read-only token via SSH stdin;
-its temporary Docker login file is removed when the command exits.
-Admin SSH passwords, app encryption keys and the setup token are not GitHub secrets.
+External CI cannot reach this NAS's SSH port. The NAS checks the public, source-only
+GHCR image every two minutes instead. Anonymous pull access is required and must be
+verified after creating or changing the package. No SSH port is exposed, no permanent
+GitHub token is stored on the NAS, and CI has no NAS administration key.
+The root-owned deploy script accepts only this repository's immutable image digest.
+Run `install-polling.sh` after installing the scripts. `deployment.log` records errors.
+Creating `/volume1/work-automation/.auto-deploy-paused` pauses the updater; removing
+that file resumes it. Use this before a manual rollback or maintenance.
+
+Before replacement, new API writes are briefly paused and existing portal jobs must
+finish. If work stays active, deployment is deferred without stopping the container.
+CI waits for the exact commit reported by `/health`, not merely an HTTP 200 response.
 
 Do not run `install-nas.sh` against an existing installation. It intentionally refuses
-to replace an existing directory. Review it before first use, retain an authenticated
-administrator session, validate `sshd -t` and sudoers, reload SSH, and verify both
-`ping` and denial of arbitrary commands with the new key.
+to replace an existing directory. Review it before first use and validate nginx before reload.
 
 The application image is delivered automatically. Infrastructure files (`compose.yml`,
 root-owned scripts, nginx configuration) require a reviewed administrator update;
-the restricted CI key cannot rewrite its own permissions or host configuration.
+CI does not rewrite host configuration.
 
 ## HTTPS
 
@@ -65,8 +69,8 @@ verify this custom host and its renewal job after such operations.
 image, or stops only this new service if no prior image exists. Deployment failures
 remain failed in Actions. The database is not automatically rolled back, to avoid
 discarding user changes; any incompatible future schema change needs a migration
-and recovery plan. An operator may deploy a prior successful digest through the
-same restricted command with a current read-only GHCR token.
+and recovery plan. An operator may pause polling and run `bin/deploy.sh sha256:...`
+as root with a prior successful digest. No registry password is needed for this public image.
 
 Keep the original `pelmon.kro.kr` service running. Never run global Docker cleanup,
 modify another project's compose file, or expose port 3211 on all interfaces.

@@ -84,7 +84,9 @@ function createConfig(overrides = {}) {
 
     return {
         rootDir: ROOT_DIR,
+        revision: overrides.revision || process.env.APP_REVISION || 'development',
         dataDir,
+        maintenanceFile: path.join(dataDir, '.deployment-pause'),
         databasePath: overrides.databasePath || process.env.DATABASE_PATH || path.join(dataDir, 'worklog.db'),
         masterKey: configuredKey || getOrCreateLocalMasterKey(dataDir),
         setupToken: setupToken || null,

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
@@ -156,6 +157,15 @@ function createApp(config, overrides = {}) {
     }));
     app.use(express.json({ limit: '256kb' }));
 
+    app.use('/api', (req, res, next) => {
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+            && config.maintenanceFile && fs.existsSync(config.maintenanceFile)) {
+            res.setHeader('Retry-After', '30');
+            return res.status(503).json({ error: '업데이트 준비 중입니다. 잠시 후 다시 시도해주세요.' });
+        }
+        next();
+    });
+
     app.use((req, res, next) => {
         res.setHeader('Cache-Control', req.path.startsWith('/api/') ? 'no-store' : 'no-cache');
         const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
@@ -224,7 +234,12 @@ function createApp(config, overrides = {}) {
     };
 
     app.get('/health', (req, res) => {
-        res.json({ ok: true, service: 'worklog-web' });
+        res.json({ ok: true, service: 'worklog-web', revision: config.revision || 'development' });
+    });
+
+    app.get('/internal/deployment', (req, res) => {
+        if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return res.sendStatus(404);
+        res.json({ busy: queue.running > 0 || queue.pending.length > 0 || activeMutations.size > 0 });
     });
 
     app.get('/api/bootstrap', (req, res) => {

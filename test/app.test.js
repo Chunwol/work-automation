@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const request = require('supertest');
@@ -31,6 +33,28 @@ async function waitForJob(agent, jobId, timeoutMs = 2_000) {
     }
     throw new Error('job timeout');
 }
+
+test('deployment pause blocks new writes and reports in-flight portal work', async t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-deploy-test-'));
+    const maintenanceFile = path.join(directory, '.deployment-pause');
+    const runtime = createApp({ ...testConfig(), maintenanceFile, revision: 'verified-test-revision' });
+    t.after(() => { runtime.db.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+    const agent = request(runtime.app);
+    assert.equal((await agent.get('/health')).body.revision, 'verified-test-revision');
+    assert.equal((await agent.get('/internal/deployment')).body.busy, false);
+    runtime.queue.running = 1;
+    assert.equal((await agent.get('/internal/deployment')).body.busy, true);
+    runtime.queue.running = 0;
+    fs.writeFileSync(maintenanceFile, '');
+    for (const endpoint of ['/api/jobs', '/api/signup', '/api/portal-records/2026/9/mutate']) {
+        const response = await agent.post(endpoint).send({});
+        assert.equal(response.status, 503);
+        assert.equal(response.headers['retry-after'], '30');
+    }
+    assert.equal((await agent.get('/api/bootstrap')).status, 200);
+    fs.unlinkSync(maintenanceFile);
+    assert.equal((await agent.post('/api/jobs').send({})).status, 401);
+});
 
 test('public signup is isolated, never grants admin, and permits a later protected admin setup', async (t) => {
     const runtime = createApp({ ...testConfig(), setupToken: 'server-only-token' });
