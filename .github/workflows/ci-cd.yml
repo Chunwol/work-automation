@@ -1,0 +1,152 @@
+name: Test and deploy web app
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worklog-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx puppeteer browsers install chrome --install-deps
+      - run: npm test
+      - run: npm run test:ui
+      - run: npm run test:calendar-ui
+      - run: npm run test:modal-ui
+      - name: Keep synthetic UI test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-test-reports
+          path: |
+            artifacts/ui-*.png
+            artifacts/calendar-records-*.png
+            artifacts/modal-*.png
+            artifacts/modal-ui-smoke.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  image:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    env:
+      IMAGE: ghcr.io/chunwol/work-automation
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/chunwol/work-automation:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Check production container without contacting school APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          key=$(openssl rand -base64 32)
+          setup=$(openssl rand -hex 32)
+          echo "::add-mask::$key"
+          echo "::add-mask::$setup"
+          docker run -d --name worklog-ci --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --memory 512m \
+            --tmpfs /data:uid=1000,gid=1000,mode=0700 \
+            -e APP_MASTER_KEY="$key" -e SETUP_TOKEN="$setup" \
+            -e COOKIE_SECURE=true -e TRUST_PROXY=true "$IMAGE:$GITHUB_SHA"
+          for attempt in $(seq 1 40); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' worklog-ci)
+            if [ "$status" = healthy ]; then break; fi
+            sleep 2
+          done
+          test "$status" = healthy
+          docker exec worklog-ci node -e '
+            const assert = require("node:assert/strict");
+            assert.notEqual(process.getuid(), 0);
+            (async () => {
+              const response = await fetch("http://127.0.0.1:3210/api/bootstrap");
+              assert.equal(response.status, 200);
+              const body = await response.json();
+              assert.equal(body.authenticated, false);
+              assert.equal(body.setupRequired, true);
+              assert.equal(body.setupTokenRequired, true);
+            })().catch(error => { console.error(error); process.exit(1); });'
+          docker rm -f worklog-ci
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified image
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+          ref=$(docker image inspect "$IMAGE:$GITHUB_SHA" --format '{{index .RepoDigests 0}}')
+          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: image
+    if: vars.NAS_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      packages: read
+    env:
+      NAS_HOST: ${{ vars.NAS_HOST }}
+      NAS_USER: ${{ vars.NAS_USER }}
+      DEPLOY_KEY: ${{ secrets.NAS_DEPLOY_KEY }}
+      KNOWN_HOSTS: ${{ secrets.NAS_KNOWN_HOSTS }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+    steps:
+      - name: Deploy only this service over a restricted SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          temp=$(mktemp -d)
+          trap 'rm -rf "$temp"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$temp/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$temp/known_hosts"
+          printf '%s\n' "$GH_TOKEN" | ssh -T -i "$temp/key" \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$temp/known_hosts" -o ConnectTimeout=20 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
+            "$NAS_USER@$NAS_HOST" "deploy $IMAGE_DIGEST"
+      - name: Verify public HTTPS endpoint
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 https://work.pelmon.kro.kr/health

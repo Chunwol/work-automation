@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f6f8fb">
+    <title>근로기록실</title>
+    <link rel="preload" href="/fonts/SUIT-Variable.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+</head>
+<body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <main id="auth-view" class="auth-layout" hidden>
+        <section class="auth-story" aria-label="서비스 소개">
+            <div class="brand brand-light">
+                <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span>근로기록실</span>
+            </div>
+            <div class="story-copy">
+                <p class="eyebrow">WORK LOG STUDIO</p>
+                <h1>근로일지는<br>정확하게, <em>가볍게.</em></h1>
+                <p>한 달의 근무시간을 달력에 정리하고, 포털 조회부터 입력 후 검증까지 한곳에서 처리합니다.</p>
+            </div>
+            <div class="story-calendar" aria-hidden="true">
+                <div class="story-calendar-top"><span>MY SCHEDULE</span><span>+</span></div>
+                <div class="story-calendar-week"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+                <div class="story-calendar-grid"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div class="story-note">
+                <span>01</span>
+                <p>계정마다 일정과 포털 정보가 분리되어 안전하게 관리됩니다.</p>
+            </div>
+        </section>
+
+        <section class="auth-panel">
+            <div class="mobile-brand brand">
+                <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span>근로기록실</span>
+            </div>
+            <div class="auth-card">
+                <p id="auth-kicker" class="eyebrow">WELCOME BACK</p>
+                <h2 id="auth-title">다시 만나 반가워요.</h2>
+                <p id="auth-description" class="muted">내 계정으로 로그인하거나 새로 가입하세요.</p>
+                <div class="auth-tabs" aria-label="로그인 또는 회원가입">
+                    <button id="login-tab" type="button" aria-pressed="true">로그인</button>
+                    <button id="signup-tab" type="button" aria-pressed="false">회원가입</button>
+                </div>
+
+                <form id="auth-form" novalidate>
+                    <label class="field" id="display-name-field" hidden>
+                        <span>표시 이름</span>
+                        <input id="display-name" name="displayName" autocomplete="name" maxlength="40" placeholder="표시할 이름 입력">
+                    </label>
+                    <label class="field" id="setup-token-field" hidden>
+                        <span>초기 설정 보안 토큰</span>
+                        <input id="setup-token" name="setupToken" type="password" autocomplete="off" maxlength="200" placeholder="서버의 SETUP_TOKEN">
+                    </label>
+                    <label class="field">
+                        <span>아이디</span>
+                        <input id="username" name="username" autocomplete="username" maxlength="32" required placeholder="아이디 입력">
+                    </label>
+                    <label class="field">
+                        <span>비밀번호</span>
+                        <span class="password-wrap">
+                            <input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required placeholder="비밀번호 입력">
+                            <button type="button" class="text-button password-toggle" data-target="password">보기</button>
+                        </span>
+                    </label>
+                    <label class="field" id="password-confirm-field" hidden>
+                        <span>비밀번호 확인</span>
+                        <input id="password-confirm" type="password" autocomplete="new-password" maxlength="128" placeholder="비밀번호를 한 번 더 입력">
+                    </label>
+                    <p id="auth-error" class="form-error" role="alert" hidden></p>
+                    <button id="auth-submit" class="button button-primary button-wide" type="submit">로그인</button>
+                </form>
+                <p id="setup-hint" class="auth-hint" hidden>첫 계정은 관리자 계정으로 생성됩니다. 비밀번호는 10자 이상 사용해주세요.</p>
+                <button id="admin-setup-button" type="button" class="text-button admin-setup-link" hidden>서버 관리자 초기 설정</button>
+            </div>
+        </section>
+    </main>
+
+    <div id="dashboard-view" class="app-shell" hidden>
+        <header class="topbar">
+            <a class="brand" href="#" aria-label="근로기록실 홈">
+                <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span>근로기록실</span>
+            </a>
+            <div class="topbar-actions">
+                <button id="help-button" class="help-button" type="button" aria-haspopup="dialog" aria-controls="help-dialog">도움말</button>
+                <span id="security-chip" class="chip chip-secure">암호화 보관</span>
+                <button id="admin-button" class="icon-text-button" type="button" hidden>사용자 관리</button>
+                <button id="user-menu-button" class="user-button" type="button" aria-haspopup="menu">
+                    <span id="user-avatar" class="avatar">관</span>
+                    <span><strong id="user-display-name">사용자</strong><small id="user-role">일반 사용자</small></span>
+                    <span aria-hidden="true">⌄</span>
+                </button>
+                <div id="user-menu" class="user-menu" role="menu" hidden>
+                    <button id="admin-menu-button" type="button" role="menuitem" hidden>사용자 관리</button>
+                    <button id="change-password-button" type="button" role="menuitem">앱 비밀번호 변경</button>
+                    <button id="logout-button" type="button" role="menuitem">로그아웃</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <section class="page-heading reveal">
+                <div>
+                    <p class="eyebrow">MY WORKSPACE</p>
+                    <h1><span id="heading-name">사용자</span>님의 근로 기록</h1>
+                </div>
+                <div class="month-switcher" aria-label="조회 월 변경">
+                    <button id="previous-month" type="button" aria-label="이전 달">←</button>
+                    <button id="month-label" type="button" aria-label="오늘이 포함된 달로 이동">2026. 06</button>
+                    <button id="next-month" type="button" aria-label="다음 달">→</button>
+                </div>
+            </section>
+
+            <section class="metrics reveal delay-1" aria-label="월간 요약">
+                <article class="metric metric-dark">
+                    <span>예정 근로시간</span>
+                    <strong id="total-hours">0<small>시간</small></strong>
+                    <p id="total-minutes-note" hidden></p>
+                </article>
+                <article class="metric">
+                    <span>예정 근무일</span>
+                    <strong id="work-days">0<small>일</small></strong>
+                </article>
+                <article class="metric">
+                    <span>포털 계정</span>
+                    <strong id="portal-state" class="metric-status">미등록</strong>
+                    <button id="portal-settings-button" class="inline-action" type="button">계정 설정</button>
+                </article>
+                <article class="metric metric-accent">
+                    <span>자동화 상태</span>
+                    <strong id="automation-state" class="metric-status">준비</strong>
+                    <p id="automation-note">실행 대기 중</p>
+                </article>
+            </section>
+
+            <div class="content-grid reveal delay-2">
+                <section class="panel calendar-panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">SCHEDULE</p>
+                            <div class="calendar-title-row"><h2>월간 일정</h2><span id="save-state" class="save-state">저장된 변경 없음</span></div>
+                        </div>
+                        <div class="panel-actions">
+                            <button id="repeat-settings-button" class="button button-quiet" type="button">요일 반복 설정</button>
+                            <button id="save-schedule-button" class="button button-primary" type="button">일정 저장</button>
+                        </div>
+                    </div>
+                    <div class="schedule-settings">
+                        <div class="content-field-row">
+                            <label class="field compact-field">
+                                <span>근무내용 · 100바이트 이내</span>
+                                <input id="work-content" maxlength="100" value="실습실 점검">
+                            </label>
+                        </div>
+                        <div class="assignment-field">
+                            <div class="assignment-copy">
+                                <span>근로 배정</span>
+                                <strong id="assignment-label">아직 선택하지 않음</strong>
+                            </div>
+                            <button id="assignment-settings-button" class="button button-quiet" type="button">배정 조회·선택</button>
+                        </div>
+                    </div>
+                    <div class="calendar-legend">
+                        <span><i class="legend-dot work"></i>입력 예정</span>
+                        <span><i class="legend-dot portal-national"></i>포털 국가</span>
+                        <span><i class="legend-dot portal-general"></i>포털 일반</span>
+                        <span><i class="legend-dot repeat"></i>요일 반복</span>
+                        <span><i class="legend-dot excluded"></i>제외일</span>
+                    </div>
+                    <div id="portal-calendar-summary" class="portal-calendar-summary" aria-live="polite">
+                        <strong>포털 기록 미조회</strong>
+                    </div>
+                    <p id="holiday-calendar-note" class="holiday-calendar-note" role="alert" hidden></p>
+                    <div class="calendar-weekdays" aria-hidden="true">
+                        <span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span>
+                    </div>
+                    <div id="calendar" class="calendar" aria-label="근무 일정 달력"></div>
+                </section>
+
+                <aside class="side-stack">
+                    <section class="panel run-panel">
+                        <div class="panel-header compact">
+                            <div>
+                                <p class="panel-kicker">PORTAL RUNNER</p>
+                                <h2>포털 자동화</h2>
+                            </div>
+                            <span class="live-dot"><i></i>대기</span>
+                        </div>
+                        <div class="run-actions">
+                            <button id="query-button" class="button button-quiet" type="button">기록만 조회</button>
+                            <button id="run-button" class="button button-accent" type="button">자동 입력 시작</button>
+                        </div>
+                    </section>
+
+                    <section class="panel activity-panel">
+                        <div class="panel-header compact">
+                            <div>
+                                <p class="panel-kicker">ACTIVITY</p>
+                                <h2>최근 작업</h2>
+                            </div>
+                            <button id="refresh-jobs-button" class="text-button" type="button">새로고침</button>
+                        </div>
+                        <div id="job-list" class="job-list">
+                            <div class="empty-state"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 10h16m-11 5h6"/></svg></span><p>아직 실행한 작업이 없습니다.</p></div>
+                        </div>
+                    </section>
+                </aside>
+            </div>
+        </main>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+    <dialog id="action-confirm-dialog" class="modal small-modal action-confirm-dialog" aria-labelledby="action-confirm-title" aria-describedby="action-confirm-message action-confirm-details">
+        <form method="dialog">
+            <div class="modal-header">
+                <h2 id="action-confirm-title">변경 확인</h2>
+                <button class="modal-close" type="submit" value="cancel" aria-label="취소하고 닫기">×</button>
+            </div>
+            <p id="action-confirm-message" class="action-confirm-message"></p>
+            <ul id="action-confirm-details" class="action-confirm-details" hidden></ul>
+            <div class="modal-actions">
+                <button id="action-confirm-cancel" class="button button-quiet" type="submit" value="cancel" autofocus>취소</button>
+                <button id="action-confirm-submit" class="button button-primary" type="submit" value="confirm">확인</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="help-dialog" class="modal help-dialog" aria-labelledby="help-title">
+        <div class="modal-header">
+            <div><p class="panel-kicker">GUIDE</p><h2 id="help-title">도움말</h2></div>
+            <button class="modal-close" type="button" data-close-dialog="help-dialog" aria-label="도움말 닫기" autofocus>×</button>
+        </div>
+        <div class="help-sections">
+            <details>
+                <summary>처음 사용하기</summary>
+                <ol>
+                    <li>회원가입 후 내 학교 포털 계정을 연결합니다.</li>
+                    <li>작성할 월을 고르고, <strong>배정 조회·선택</strong>에서 장학 유형과 근무지를 선택합니다.</li>
+                    <li>일정을 만들고 <strong>일정 저장</strong>으로 보관합니다.</li>
+                    <li><strong>기록만 조회</strong>로 기존 일지를 확인한 뒤 <strong>자동 입력 시작</strong>에서 실제 등록할 내용을 확인합니다.</li>
+                </ol>
+            </details>
+            <details>
+                <summary>일정 추가·복사·삭제</summary>
+                <ul>
+                    <li>날짜를 누르고 출퇴근 시간을 적용하면 수동 예정 일정이 생깁니다.</li>
+                    <li>수동 예정 일정을 같은 월의 빈 날짜로 드래그하면 바로 시간을 복사합니다. 원본은 유지합니다.</li>
+                    <li>모바일·키보드에서는 날짜 상세창의 <strong>복사할 날짜</strong>와 <strong>일정 복사</strong>를 사용하세요.</li>
+                    <li>공휴일·추가 지정 휴일이거나 기존 예정 일정·포털 기록이 있는 날짜에만 확인 모달을 표시합니다. 같은 시간의 예정 일정이 이미 있으면 아무것도 바꾸지 않습니다. 근무내용과 배정은 현재 월의 공통 설정을 사용합니다.</li>
+                    <li><strong>예정 일정만 삭제</strong>는 해당 날짜만 제외합니다. 다른 날짜의 반복 일정과 포털 기록은 유지합니다.</li>
+                    <li>변경 후 <strong>일정 저장</strong>을 눌러 보관하세요. 예정 일정 편집·복사만으로 포털에 등록되지는 않습니다.</li>
+                </ul>
+            </details>
+            <details>
+                <summary>요일 반복·공휴일</summary>
+                <ul>
+                    <li>요일 반복은 내 계정의 현재 월에 공통 적용합니다. 다른 사용자·다른 월에는 영향을 주지 않습니다.</li>
+                    <li>날짜별 수동 시간이 반복 시간보다 우선하고, 근무 제외 설정은 그 날짜의 일정을 제외합니다.</li>
+                    <li>공휴일은 빨갛게 표시하고 기본적으로 제외합니다. 실제로 일했다면 날짜 상세창에서 <strong>공휴일 근무</strong>를 선택하세요.</li>
+                    <li>공휴일 근무 예외를 선택해도 학교 포털의 입력 제한을 해제하는 것은 아닙니다. 공휴일 조회 오류는 달력에 별도로 표시합니다.</li>
+                </ul>
+            </details>
+            <details>
+                <summary>포털 기록 조회·수정·삭제</summary>
+                <ul>
+                    <li><strong>기록만 조회</strong>를 누르면 승인된 배정별 일지가 달력에 표시됩니다. 국가·일반근로를 구분하며 예정 일정의 시수와 별도로 집계합니다.</li>
+                    <li>달력의 포털 기록은 마지막 조회 시각 기준입니다. 학교에서 바뀐 내용은 다시 조회해야 반영됩니다.</li>
+                    <li>날짜를 눌러 포털 일지의 시간·내용을 수정하거나 삭제할 수 있습니다. 실제 변경 동의 후 원본을 다시 확인하고 처리 결과를 재조회합니다.</li>
+                    <li><strong>확인 완료 일지는 수정·삭제할 수 없습니다.</strong> 학교 담당자에게 문의하세요. 날짜·배정 자체를 바꾸는 직접 수정도 지원하지 않습니다.</li>
+                    <li>포털 일지를 삭제해도 예정 일정은 남습니다. 재등록하지 않으려면 해당 날짜의 예정 일정도 삭제하세요.</li>
+                </ul>
+            </details>
+            <details>
+                <summary>자동입력과 지원 범위</summary>
+                <ul>
+                    <li>자동입력은 현재 월에 선택한 장학 유형·근무지로 진행합니다. 날짜별로 서로 다른 배정을 자동 분리하는 기능은 아직 지원하지 않습니다.</li>
+                    <li>종료된 근무만 등록할 수 있습니다. 승인기간, 공휴일, 근로시간 한도, 중복·시간 겹침을 검사하고 저장 결과를 다시 확인합니다.</li>
+                    <li>선택한 배정에 같은 날짜·시간의 일지가 있으면 중복 등록하지 않습니다. 다른 배정과 시간이 겹치면 입력을 중단합니다.</li>
+                    <li>학교 응답이 불확실하면 무작정 다시 저장하지 않습니다. 기록을 조회해 결과부터 확인하세요.</li>
+                    <li>학생 본인에게 허용된 조회·등록·수정·삭제를 지원합니다. 직원용 승인 처리나 다른 학생의 일지 관리는 지원하지 않습니다.</li>
+                </ul>
+            </details>
+            <details>
+                <summary>계정과 개인정보</summary>
+                <ul>
+                    <li>앱 로그인과 학교 포털 로그인은 별도입니다. 계정마다 일정·조회 기록·포털 정보가 분리됩니다.</li>
+                    <li>학교 포털 아이디와 비밀번호는 서버에 AES-256-GCM으로 암호화해 보관합니다. 앱 비밀번호는 복호화할 수 없는 해시로 저장합니다.</li>
+                    <li>포털 계정 설정에서 연결 정보를 변경하거나 삭제할 수 있습니다. 연결 정보를 삭제해도 학교 포털의 일지는 삭제되지 않습니다.</li>
+                </ul>
+            </details>
+        </div>
+    </dialog>
+
+    <dialog id="day-dialog" class="modal small-modal">
+        <form id="day-form" method="dialog">
+            <div class="modal-header">
+                <div><p class="panel-kicker">WORK DAY</p><h2 id="day-dialog-title">6월 1일 월요일</h2></div>
+                <button class="modal-close" value="cancel" aria-label="닫기">×</button>
+            </div>
+            <div id="day-portal-records" class="day-portal-records" hidden></div>
+            <label id="day-holiday-field" class="check-field holiday-work-field" hidden><input id="day-holiday-work" type="checkbox"><span id="day-holiday-label">공휴일 근무 · 자동 제외 해제</span></label>
+            <h3 class="day-section-title">예정 일정</h3>
+            <div class="time-row">
+                <label class="field"><span>출근</span><input id="day-start" type="time" step="300" required></label>
+                <span aria-hidden="true">→</span>
+                <label class="field"><span>퇴근</span><input id="day-end" type="time" step="300" required></label>
+            </div>
+            <label class="check-field"><input id="day-excluded" type="checkbox"><span>이 날짜를 근무에서 제외</span></label>
+            <div id="day-copy-fields" class="day-copy-fields" hidden>
+                <label class="field"><span>복사할 날짜</span><select id="day-copy-target"></select></label>
+                <button id="copy-day-button" class="button button-quiet" type="button">일정 복사</button>
+            </div>
+            <p id="day-error" class="form-error" hidden></p>
+            <div class="modal-actions split-actions">
+                <button id="remove-day-button" class="button button-danger-quiet" type="button">예정 일정만 삭제</button>
+                <span></span>
+                <button class="button button-quiet" value="cancel">취소</button>
+                <button class="button button-primary" type="submit" value="default">적용</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="portal-record-dialog" class="modal medium-modal">
+        <form id="portal-record-form" method="dialog">
+            <div class="modal-header"><div><p class="panel-kicker">PORTAL RECORD</p><h2 id="portal-record-title">포털 일지 수정</h2></div><button class="modal-close" value="cancel" aria-label="닫기">×</button></div>
+            <div id="portal-record-summary" class="day-portal-record"></div>
+            <div id="portal-record-edit-fields">
+                <div class="time-row">
+                    <label class="field"><span>출근</span><input id="portal-record-start" type="time" required></label>
+                    <span>→</span>
+                    <label class="field"><span>퇴근</span><input id="portal-record-end" type="time" required></label>
+                </div>
+                <label class="field"><span>근무내용 · 100바이트 이내</span><textarea id="portal-record-content" maxlength="100" rows="3" required></textarea></label>
+            </div>
+            <div class="confirm-warning"><strong id="portal-record-warning">학교 포털의 실제 일지가 변경됩니다.</strong><p>변경 직전에 원본과 확인 상태를 다시 조회하고, 처리 후 결과를 검증합니다. 확인 완료 일지는 변경할 수 없습니다.</p></div>
+            <label class="check-field"><input id="portal-record-confirm" type="checkbox"><span>대상 일지와 실제 변경 내용을 확인했습니다.</span></label>
+            <p id="portal-record-error" class="form-error" role="alert" hidden></p>
+            <div class="modal-actions"><button class="button button-quiet" value="cancel" formnovalidate>취소</button><button id="portal-record-submit" class="button button-accent" type="submit" disabled>포털 일지 수정</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="repeat-dialog" class="modal medium-modal">
+        <form id="repeat-form" method="dialog">
+            <div class="modal-header">
+                <div><p class="panel-kicker">WEEKLY RULE</p><h2>요일 반복 설정</h2></div>
+                <button class="modal-close" value="cancel" aria-label="닫기">×</button>
+            </div>
+            <div id="repeat-list" class="repeat-list"></div>
+            <div class="modal-actions">
+                <button class="button button-quiet" value="cancel">취소</button>
+                <button class="button button-primary" type="submit" value="default">반복 규칙 적용</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="portal-dialog" class="modal medium-modal">
+        <form id="portal-form" method="dialog" autocomplete="off">
+            <div class="modal-header">
+                <div><p class="panel-kicker">PORTAL ACCOUNT</p><h2>학교 포털 계정</h2></div>
+                <button class="modal-close" value="cancel" aria-label="닫기">×</button>
+            </div>
+            <label class="field"><span>포털 아이디</span><input id="portal-id" autocomplete="off" maxlength="80" required></label>
+            <label class="field"><span>포털 비밀번호</span><span class="password-wrap"><input id="portal-password" type="password" autocomplete="new-password" maxlength="200" required><button type="button" class="text-button password-toggle" data-target="portal-password">보기</button></span></label>
+            <p id="portal-error" class="form-error" hidden></p>
+            <div class="modal-actions split-actions">
+                <button id="delete-portal-button" class="button button-danger-quiet" type="button">등록 정보 삭제</button>
+                <span></span>
+                <button class="button button-quiet" value="cancel">취소</button>
+                <button class="button button-primary" type="submit" value="default">암호화하여 저장</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="assignment-dialog" class="modal medium-modal">
+        <form id="assignment-form" method="dialog">
+            <div class="modal-header">
+                <div><p class="panel-kicker">APPROVED ASSIGNMENT</p><h2>근로 배정 선택</h2></div>
+                <button class="modal-close" value="cancel" aria-label="닫기">×</button>
+            </div>
+            <div id="assignment-list" class="assignment-list"></div>
+            <p id="assignment-error" class="form-error" hidden></p>
+            <div class="modal-actions">
+                <button class="button button-quiet" value="cancel">취소</button>
+                <button class="button button-primary" type="submit" value="default">이 배정 사용</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="run-dialog" class="modal medium-modal">
+        <form id="run-confirm-form" method="dialog">
+            <div class="modal-header">
+                <div><p class="panel-kicker">FINAL CHECK</p><h2>포털 자동 입력을 시작할까요?</h2></div>
+                <button class="modal-close" value="cancel" aria-label="닫기">×</button>
+            </div>
+            <div id="run-summary" class="run-summary"></div>
+            <div class="confirm-warning"><strong>실제 포털에 저장됩니다.</strong><p>종료된 근무만 입력할 수 있습니다. 기존에 같은 날짜와 시간이 있으면 유지하고, 신규 저장 후 날짜·시간·내용을 API로 다시 검증합니다.</p></div>
+            <label class="check-field"><input id="run-confirm-checkbox" type="checkbox"><span>일정과 시간을 확인했습니다.</span></label>
+            <div class="modal-actions">
+                <button class="button button-quiet" value="cancel">취소</button>
+                <button id="confirm-run-button" class="button button-accent" type="submit" value="default" disabled>자동 입력 실행</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="password-dialog" class="modal small-modal">
+        <form id="password-form" method="dialog">
+            <div class="modal-header"><div><p class="panel-kicker">SECURITY</p><h2>앱 비밀번호 변경</h2></div><button class="modal-close" value="cancel" aria-label="닫기">×</button></div>
+            <label class="field"><span>현재 비밀번호</span><input id="current-password" type="password" autocomplete="current-password" required></label>
+            <label class="field"><span>새 비밀번호</span><input id="new-password" type="password" autocomplete="new-password" minlength="10" required></label>
+            <p id="password-error" class="form-error" hidden></p>
+            <div class="modal-actions"><button class="button button-quiet" value="cancel">취소</button><button class="button button-primary" type="submit" value="default">변경</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="admin-dialog" class="modal large-modal">
+        <div class="modal-header"><div><p class="panel-kicker">ADMINISTRATION</p><h2>사용자 관리</h2></div><button class="modal-close" type="button" data-close-dialog="admin-dialog" aria-label="닫기">×</button></div>
+        <div class="admin-layout">
+            <form id="create-user-form" class="create-user-card">
+                <h3>새 사용자 추가</h3>
+                <label class="field"><span>표시 이름</span><input name="displayName" maxlength="40" required></label>
+                <label class="field"><span>로그인 아이디</span><input name="username" maxlength="32" required></label>
+                <label class="field"><span>초기 비밀번호</span><input name="password" type="password" minlength="10" required></label>
+                <label class="field"><span>권한</span><select name="role"><option value="user">일반 사용자</option><option value="admin">관리자</option></select></label>
+                <p id="create-user-error" class="form-error" hidden></p>
+                <button class="button button-primary button-wide" type="submit">사용자 생성</button>
+            </form>
+            <div class="user-table-wrap">
+                <div id="admin-user-list" class="admin-user-list"></div>
+            </div>
+        </div>
+    </dialog>
+</body>
+</html>

@@ -6,7 +6,7 @@
   
   "password": "비밀번호",
   "_password_comment": "로그인에 사용할 비밀번호",
-  
+
   "schedule": {
     "_comment": "일정 기본 정보",
     "year": 2026,
@@ -45,5 +45,8 @@
   "_specialDates_comment": "특수 날짜 객체 - 날짜(문자열)를 키로, {start, end} 객체를 값으로",
   
   "vacationDates": [15, 16, 17],
-  "_vacationDates_comment": "휴가 날짜 배열 - 이 날짜들은 일정 입력에서 제외됨 (숫자 배열, 예: [15, 16, 17] = 15일, 16일, 17일)"
+  "_vacationDates_comment": "휴가 날짜 배열 - 이 날짜들은 일정 입력에서 제외됨 (숫자 배열, 예: [15, 16, 17] = 15일, 16일, 17일)",
+
+  "extraHolidayDates": [1],
+  "_extraHolidayDates_comment": "추가 공휴일 배열 - API 결과에 더해 제외할 날짜 (숫자 배열)"
 }

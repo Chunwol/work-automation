@@ -1,0 +1,40 @@
+version: "2.4"
+services:
+  worklog:
+    image: ${WORKLOG_IMAGE:?Set an immutable image digest}
+    container_name: work-automation
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3211:3210"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3210"
+      DATA_DIR: /data
+      TZ: Asia/Seoul
+      COOKIE_SECURE: "true"
+      TRUST_PROXY: "true"
+      APP_MASTER_KEY_FILE: /run/secrets/master-key
+      SETUP_TOKEN_FILE: /run/secrets/setup-token
+      AUTOMATION_CONCURRENCY: "1"
+      PORTAL_REQUEST_INTERVAL_MS: "1500"
+    volumes:
+      - ./data:/data
+      - ./secrets:/run/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpuset: "0"
+    cpu_shares: 256
+    pids_limit: 128
+    stop_grace_period: 35s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
