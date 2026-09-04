@@ -7,7 +7,7 @@ PC accounts, schedules, credentials and screenshots are never uploaded.
 
 ## Layout and isolation
 
-- `/volume1/docker/work-automation`: root-owned deployment configuration.
+- `/volume1/work-automation`: root-owned deployment configuration.
 - `data/worklog.db`: persistent SQLite database, container UID 1000.
 - `secrets/master-key`: encryption key; losing it prevents credential recovery.
 - `secrets/setup-token`: first-administrator setup token. General signup needs no token.

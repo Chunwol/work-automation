@@ -2,7 +2,7 @@
 set -eu
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
-base=/volume1/docker/work-automation
+base=/volume1/work-automation
 docker run --rm --name work-automation-cert-renew --memory 256m --cpuset-cpus 0 --cpu-shares 128 \
     -v "$base/tls:/etc/letsencrypt" \
     -v "$base/acme:/var/www/acme" \

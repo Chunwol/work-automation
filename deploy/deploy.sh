@@ -5,7 +5,7 @@ PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 
 [ "$(id -u)" -eq 0 ] || exit 77
-base=/volume1/docker/work-automation
+base=/volume1/work-automation
 digest=${1:-}
 hash=${digest#sha256:}
 case "$hash" in *[!a-f0-9]*) exit 64 ;; esac

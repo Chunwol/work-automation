@@ -64,10 +64,30 @@ function verifyScheduleRevision(revision) {
     return false;
 }
 
+let dialogFocusFrame = 0;
+
+function revealDialogInput() {
+    cancelAnimationFrame(dialogFocusFrame);
+    dialogFocusFrame = requestAnimationFrame(() => {
+        const input = document.activeElement;
+        const dialog = input?.closest('dialog[open]');
+        if (!dialog || !input.matches('input:not([type="checkbox"]), textarea, select')) return;
+        const box = input.getBoundingClientRect();
+        const header = dialog.querySelector('.modal-header')?.getBoundingClientRect();
+        const footer = dialog.querySelector('.modal-actions')?.getBoundingClientRect();
+        const bounds = dialog.getBoundingClientRect();
+        const top = Math.max(bounds.top, header?.bottom || bounds.top) + 12;
+        const bottom = Math.min(bounds.bottom, footer?.top || bounds.bottom) - 12;
+        if (box.bottom > bottom) dialog.scrollTop += box.bottom - bottom;
+        else if (box.top < top) dialog.scrollTop -= top - box.top;
+    });
+}
+
 function updateDialogViewport() {
     const viewport = window.visualViewport;
     document.documentElement.style.setProperty('--dialog-viewport-height', `${viewport?.height || innerHeight}px`);
     document.documentElement.style.setProperty('--dialog-viewport-top', `${viewport?.offsetTop || 0}px`);
+    revealDialogInput();
 }
 
 function escapeHtml(value) {
@@ -1080,6 +1100,10 @@ function bindEvents() {
     window.addEventListener('resize', updateDialogViewport);
     window.visualViewport?.addEventListener('resize', updateDialogViewport);
     window.visualViewport?.addEventListener('scroll', updateDialogViewport);
+    document.addEventListener('focusin', revealDialogInput);
+    document.addEventListener('animationend', event => {
+        if (event.target.matches('dialog[open]')) revealDialogInput();
+    });
     $('#portal-record-form').addEventListener('submit', submitPortalRecordChange);
     $('#portal-record-confirm').addEventListener('change', (event) => {
         if (!state.portalMutationBusy) $('#portal-record-submit').disabled = !event.target.checked;
