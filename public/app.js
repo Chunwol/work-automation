@@ -758,15 +758,20 @@ async function removeDayEdit() {
     const entry = getEffectiveDay(day);
     if (!entry?.value) return;
     const hasRecurring = entry.recurring.length > 0;
+    const restoreRecurring = Boolean(entry.specific) && hasRecurring;
     const revision = scheduleRevision();
-    if (!await confirmAction({ title: '이 날의 예정 일정을 삭제할까요?', message: `${state.year}년 ${state.month}월 ${day}일`,
-        details: [hasRecurring ? '이 날짜만 반복 일정에서 제외합니다. 포털 기록은 삭제하지 않습니다.' : '이 날의 수동 예정 일정만 삭제합니다. 포털 기록은 삭제하지 않습니다.'], confirmLabel: '예정 일정 삭제', destructive: true })) return;
+    if (!await confirmAction({ title: restoreRecurring ? '수동 일정을 지우고 반복 일정으로 돌아갈까요?' : '이 날의 예정 일정을 삭제할까요?',
+        message: `${state.year}년 ${state.month}월 ${day}일`,
+        details: restoreRecurring
+            ? [`반복 일정: ${rangeSummary(entry.recurring)}`, '이 날의 수동 예정 일정만 삭제합니다. 포털 기록과 공휴일 설정은 유지합니다.']
+            : [hasRecurring ? '이 날짜만 반복 일정에서 제외합니다. 포털 기록은 삭제하지 않습니다.' : '이 날의 수동 예정 일정만 삭제합니다. 포털 기록은 삭제하지 않습니다.'],
+        confirmLabel: restoreRecurring ? '수동 일정 삭제' : '예정 일정 삭제', destructive: true })) return;
     if (!verifyScheduleRevision(revision)) return;
     delete state.schedule.specialDates[String(day)];
     state.schedule.vacationDates = state.schedule.vacationDates.filter(value => value !== day);
-    if (hasRecurring) state.schedule.vacationDates.push(day);
+    if (hasRecurring && !restoreRecurring) state.schedule.vacationDates.push(day);
     state.schedule.vacationDates.sort((a, b) => a - b);
-    state.schedule.holidayWorkDates = (state.schedule.holidayWorkDates || []).filter((value) => value !== day);
+    if (!restoreRecurring) state.schedule.holidayWorkDates = (state.schedule.holidayWorkDates || []).filter((value) => value !== day);
     setDirty();
     renderCalendar();
     $('#day-dialog').close();

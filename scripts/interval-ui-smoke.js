@@ -282,9 +282,58 @@ async function main() {
         await click('#repeat-form button[type="submit"]');
         await confirm();
         await page.waitForSelector('#repeat-dialog:not([open])');
+        phase = 'manual override deletion restores all recurring ranges';
+        const recurringRules = await page.evaluate(() => state.schedule.regularRules);
         await click('[data-day="3"]');
         assert.equal(await page.$$eval('#day-ranges .work-range', rows => rows.length), 3);
+        await editRange('#day-range-editor', 0, '0900', '1000');
+        await applyDay();
+        assert.ok(await page.$('[data-day="3"].override-day'));
+        const beforeCancel = await page.evaluate(() => JSON.stringify(state.schedule));
+        await click('[data-day="3"]');
         await click('#remove-day-button');
+        await page.waitForSelector('#action-confirm-dialog[open]');
+        assert.match(await page.$eval('#action-confirm-title', el => el.textContent), /반복 일정으로/);
+        assert.match(await page.$eval('#action-confirm-details', el => el.textContent), /08:00 ~ 11:00, 12:00 ~ 15:00, 16:00 ~ 18:00/);
+        await page.setViewport({ width: 320, height: 740 });
+        await page.$eval('#action-confirm-dialog', async el => { await Promise.all(el.getAnimations().map(animation => animation.finished)); });
+        assert.equal(await page.$eval('#action-confirm-dialog', el => el.scrollWidth > el.clientWidth), false);
+        assert.equal(await page.$eval('#action-confirm-submit', el => {
+            const box = el.getBoundingClientRect();
+            return box.top >= 0 && box.bottom <= innerHeight
+                && el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+        }), true);
+        await (await page.$('#action-confirm-dialog')).screenshot({ path: path.join(root, 'artifacts/intervals-restore-recurring-mobile.png') });
+        await click('#action-confirm-cancel');
+        await page.waitForFunction(() => !document.querySelector('#action-confirm-dialog').open && pendingConfirmation === null);
+        assert.equal(await page.evaluate(() => JSON.stringify(state.schedule)), beforeCancel);
+        await click('#remove-day-button');
+        await confirm();
+        await page.waitForSelector('#day-dialog:not([open])');
+        await page.setViewport({ width: 1440, height: 1100 });
+        assert.ok(await page.$('[data-day="3"].work-day:not(.override-day):not(.excluded-day)'));
+        assert.equal(await page.$$eval('[data-day="3"] .day-time', rows => rows.length), 3);
+        assert.match(await page.$eval('[data-day="3"] .day-time', el => el.textContent), /08:00/);
+        assert.deepEqual(await page.evaluate(() => state.schedule.regularRules), recurringRules);
+        await save();
+        await page.reload({ waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-day="3"].work-day:not(.override-day):not(.excluded-day)');
+        assert.equal(await page.evaluate(() => state.schedule.specialDates['3']), undefined);
+        assert.equal(await page.evaluate(() => state.schedule.vacationDates.includes(3)), false);
+        phase = 'equal-time manual override also restores recurring rules';
+        await click('[data-day="3"]');
+        await applyDay();
+        assert.ok(await page.$('[data-day="3"].override-day'));
+        await click('[data-day="3"]');
+        await click('#remove-day-button');
+        await confirm();
+        await page.waitForSelector('#day-dialog:not([open])');
+        assert.ok(await page.$('[data-day="3"].work-day:not(.override-day):not(.excluded-day)'));
+        phase = 'deleting recurring-only day still excludes only that date';
+        await click('[data-day="3"]');
+        await click('#remove-day-button');
+        await page.waitForSelector('#action-confirm-dialog[open]');
+        assert.match(await page.$eval('#action-confirm-details', el => el.textContent), /이 날짜만 반복 일정에서 제외/);
         await confirm();
         await page.waitForSelector('#day-dialog:not([open])');
         assert.ok(await page.$('[data-day="3"].excluded-day'));
@@ -302,6 +351,7 @@ async function main() {
             repeatLayoutWidths: repeatLayouts.map(item => item.width), repeatInsetDividers: true, repeatKeyboardViewport: true,
             dayLayoutWidths: dayWidths, dayDurationSummary: true, dayKeyboardViewport: true,
             realMouseDragCopiesAllRanges: true, manualDeleteRestoresEmptyDate: true, recurringDeleteExcludesOnlyDate: true,
+            manualOverrideDeletionRestoresRecurring: true, recurringRestorationPersisted: true, equalTimeOverrideRestored: true,
             savedAndReloaded: true, mobileWidths: [320, 390, 768, 1440], realPortalWrites: 0 }));
     } catch (error) {
         console.error(JSON.stringify({ phase, errors, openDialogs: await page.$$eval('dialog[open]', nodes => nodes.map(node => node.id)) }));
