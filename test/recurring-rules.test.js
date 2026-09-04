@@ -1,5 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createDatabase } = require('../src/lib/database');
 const { validateSchedulePayload } = require('../src/lib/schedule');
 
@@ -31,4 +34,33 @@ test('blank content is valid; recurring rules continue across years without inhe
     assert.deepEqual(db.getRecurringRules(user.id, 2028, 1).regularRules, []);
     assert.equal(validateSchedulePayload({ content: 'a'.repeat(101) }, 2026, 9).ok, false);
     assert.equal(validateSchedulePayload({ content: ' '.repeat(12) }, 2026, 9).value.content, '');
+});
+
+test('legacy monthly rules migrate once and inherited monthly snapshots never become change points on restart', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-recurring-'));
+    const filename = path.join(directory, 'test.sqlite');
+    let db = createDatabase(filename);
+    try {
+        const user = db.createUser({ username: 'legacy', displayName: 'Test', passwordHash: 'test' });
+        const old = db.saveSchedule(user.id, { ...schedule(9), specialDates: { 1: { start: '1000', end: '1100' } } });
+        db.saveSchedule(user.id, schedule(10, []));
+        db.raw.exec('DROP TABLE recurring_rules');
+        db.close();
+        db = createDatabase(filename);
+        assert.deepEqual(db.getSchedule(user.id, 2026, 9).specialDates, old.specialDates);
+        assert.deepEqual(db.getSchedule(user.id, 2026, 9).regularRules, old.regularRules);
+        assert.deepEqual(db.getRecurringRules(user.id, 2026, 11).regularRules, []);
+        db.saveSchedule(user.id, schedule(11));
+        db.saveSchedule(user.id, schedule(12));
+        assert.equal(db.raw.prepare('SELECT COUNT(*) AS count FROM recurring_rules').get().count, 3);
+        db.close();
+        db = createDatabase(filename);
+        assert.equal(db.raw.prepare('SELECT COUNT(*) AS count FROM recurring_rules').get().count, 3);
+        db.saveSchedule(user.id, schedule(11, [rules[1]]));
+        assert.equal(db.getSchedule(user.id, 2026, 12).regularRules.length, 1);
+        assert.deepEqual(db.getRecurringRules(user.id, 2027, 1).regularRules, db.getSchedule(user.id, 2026, 12).regularRules);
+    } finally {
+        db.close();
+        fs.rmSync(directory, { recursive: true });
+    }
 });

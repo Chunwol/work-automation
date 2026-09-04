@@ -71,6 +71,21 @@ test('empty work content can be inserted and verified without a fabricated defau
     assert.equal((await runPortalAutomation(opts)).insertedCount, 0);
 });
 
+test('clearing work content verifies portal responses that encode empty remarks as null', async () => {
+    const client = new FakePortal();
+    await runPortalAutomation(options(client));
+    const queried = await queryPortalRecords(options(client, { year: 2026, month: 9 }));
+    const change = client.change.bind(client);
+    client.change = async (key, row) => {
+        await change(key, row);
+        if (row.REMARK === '') client.records[0].REMARK = null;
+    };
+    const result = await mutatePortalRecord(options(client, { year: 2026, month: 9, operation: 'update',
+        record: queried.records[0], changes: { start: '1300', end: '1700', content: '' } }));
+    assert.equal(result.verified, true);
+    assert.equal(result.records[0].content, '');
+});
+
 test('HTTP redirects carry scoped cookies but do not replay passwords across origins', async () => {
     const requests = [];
     const client = new PortalHttpClient({ fetchImpl: async (url, init) => {

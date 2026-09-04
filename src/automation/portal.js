@@ -352,7 +352,7 @@ async function mutatePortalRecord(options) {
             catch { throw new Error('수정·삭제 요청 후 재조회에 실패했습니다. 결과가 불확실하므로 재전송하지 않았습니다.'); }
             const remaining = verified.selected.rawRecords.filter((item) => normalizeDate(item.WORK_DT) === record.date && String(item.SEQ) === record.sequence);
             const passed = operation === 'delete' ? remaining.length === 0
-                : remaining.length === 1 && String(remaining[0].ST_HHMI) === row.ST_HHMI && String(remaining[0].END_HHMI) === row.END_HHMI && remaining[0].REMARK === row.REMARK;
+                : remaining.length === 1 && String(remaining[0].ST_HHMI) === row.ST_HHMI && String(remaining[0].END_HHMI) === row.END_HHMI && String(remaining[0].REMARK || '') === row.REMARK;
             if (!passed) throw new Error(`${operation === 'delete' ? '삭제' : '수정'} 결과를 확인하지 못했습니다.${requestFailed ? ' 포털 요청 오류가 있었습니다.' : ''} 다시 조회해주세요.`);
             return { operation, mode: 'mutation', date: record.date, year, month, transport: 'http', verified: true,
                 records: verified.allRecords, assignments: verified.assignments.map(publicAssignment), verifiedCount: verified.allRecords.length };
