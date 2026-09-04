@@ -128,6 +128,9 @@ async function main() {
         const weekday = new Date(date.getFullYear(), date.getMonth(), 3).getDay();
         const editor = `[data-repeat-day="${weekday}"]`;
         await click('#repeat-settings-button');
+        await page.$eval('#repeat-dialog', async el => {
+            await Promise.all(el.getAnimations().map(animation => animation.finished));
+        });
         await click(`${editor} input[type="checkbox"]`);
         await click(`${editor} .range-start`);
         await page.keyboard.type('8');
@@ -155,12 +158,16 @@ async function main() {
                 const list = document.querySelector('#repeat-list').getBoundingClientRect();
                 return rect.top >= list.top && rect.bottom <= list.bottom;
             }, {}, `${editor} .work-range:last-child .range-end`);
-            const layout = await page.$$eval(`${editor} .work-range`, rows => rows.map(row => {
+            const layout = await page.$$eval(`${editor} .work-range`, rows => rows.map((row, index) => {
                 const start = row.querySelector('.range-start').getBoundingClientRect();
                 const end = row.querySelector('.range-end').getBoundingClientRect();
                 const remove = row.querySelector('[data-remove-range]').getBoundingClientRect();
                 const box = row.getBoundingClientRect();
-                return { width: box.width, height: box.height, start: start.toJSON(), end: end.toJSON(), remove: remove.toJSON() };
+                const style = getComputedStyle(row);
+                const divider = index > 0 ? getComputedStyle(row, '::before') : null;
+                return { width: box.width, height: box.height, start: start.toJSON(), end: end.toJSON(), remove: remove.toJSON(),
+                    borderWidth: style.borderWidth, borderRadius: style.borderRadius,
+                    dividerHeight: divider?.height ?? null };
             }));
             repeatLayouts.push({ width, rows: layout });
             for (const row of layout) {
@@ -168,11 +175,25 @@ async function main() {
                 assert.ok(Math.abs(row.start.y - row.end.y) < 1, `aligned input row at ${width}`);
                 assert.equal(row.start.height, 48);
                 assert.equal(row.end.height, 48);
+                assert.equal(row.borderWidth, '0px', `flat interval row at ${width}`);
+                assert.equal(row.borderRadius, '0px', `no interval card at ${width}`);
+                if (row.dividerHeight !== null) assert.equal(row.dividerHeight, '1px');
                 assert.ok(row.start.width >= 80, `readable time field at ${width}`);
                 assert.ok(row.height <= (width > 560 ? 100 : 150), `compact interval at ${width}`);
                 assert.ok(row.start.right < row.end.left, `non-overlapping fields at ${width}`);
                 assert.ok(row.remove.width >= 44 && row.remove.height >= 44, `touch target at ${width}`);
                 if (width > 560) assert.equal(row.remove.bottom, row.end.bottom);
+            }
+            const weekdayRows = await page.$$eval('.repeat-row', rows => rows.map((row, index) => {
+                const style = getComputedStyle(row);
+                const divider = index > 0 ? getComputedStyle(row, '::before') : null;
+                return { border: style.borderWidth, radius: style.borderRadius,
+                    divider: divider ? [divider.height, divider.left, divider.right] : null };
+            }));
+            for (const row of weekdayRows) {
+                assert.equal(row.border, '0px');
+                assert.equal(row.radius, '0px');
+                if (row.divider) assert.deepEqual(row.divider, ['1px', '10px', '10px']);
             }
             assert.equal(await page.$eval('#repeat-list', el => el.scrollWidth > el.clientWidth), false);
             await page.keyboard.press('Tab');
@@ -212,7 +233,7 @@ async function main() {
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ ok: true, splitShifts: true, midnightEnd: true, overlapBlocked: true,
             replaceTimeWithoutClearing: true, shortTimeInput: true, enterSubmitsShortTime: true,
-            repeatLayoutWidths: repeatLayouts.map(item => item.width), repeatKeyboardViewport: true,
+            repeatLayoutWidths: repeatLayouts.map(item => item.width), repeatInsetDividers: true, repeatKeyboardViewport: true,
             realMouseDragCopiesAllRanges: true, manualDeleteRestoresEmptyDate: true, recurringDeleteExcludesOnlyDate: true,
             savedAndReloaded: true, mobileWidths: [320, 390, 768, 1440], realPortalWrites: 0 }));
     } catch (error) {
