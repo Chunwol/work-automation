@@ -133,7 +133,7 @@ async function dateRules(client, assignment, date) {
         vacation: vacation.strRemark === 'Y', holiday: holidays.some((row) => row.HOLIDAY === date), key };
 }
 
-async function preflight(client, snapshot, logs, { dryRun, now, onStep = () => {} }) {
+async function preflight(client, snapshot, logs, { onStep = () => {} } = {}) {
     const { selected: assignment } = snapshot;
     if (client.identity.canUpdate !== 'Y') throw new Error('학교 포털에서 일지 저장 권한을 확인하지 못했습니다.');
     const pending = logs.filter((log) => !snapshot.records.some((record) => buildLogKey(record.date, record.start, record.end) === buildLogKey(log.date, log.start, log.end)));
@@ -152,8 +152,6 @@ async function preflight(client, snapshot, logs, { dryRun, now, onStep = () => {
         const increment = NATIONAL.has(assignment.scholarshipCode) ? 10 : assignment.scholarshipCode === '50064' ? 30 : 1;
         if (Number(log.start.slice(2)) % increment !== 0) throw new Error(`${log.date}: 시작시간은 ${increment}분 단위여야 합니다.`);
         if (!log.content.trim() || Buffer.byteLength(log.content, 'utf8') > 100) throw new Error('근무내용은 UTF-8 기준 1~100바이트여야 합니다.');
-        const endAt = new Date(`${log.date.slice(0, 4)}-${log.date.slice(4, 6)}-${log.date.slice(6)}T${log.end.slice(0, 2)}:${log.end.slice(2)}:00+09:00`);
-        if (!dryRun && endAt.getTime() > now.getTime()) throw new Error(`${log.date}: 아직 종료되지 않은 근무는 저장할 수 없습니다. 일정만 저장해주세요.`);
         const daily = all.filter((record) => record.date === log.date);
         if (daily.some((record) => log.start < record.end && record.start < log.end)) throw new Error(`${log.date}: 다른 배정을 포함하여 기존 근무시간과 겹칩니다.`);
         if (daily.reduce((sum, record) => sum + duration(record), minutes) > 480) throw new Error(`${log.date}: 하루 근로시간 8시간을 초과합니다.`);
@@ -258,7 +256,7 @@ async function runPortalAutomation(options) {
         let insertedCount = 0;
         try {
             let snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, reportSteps(options, 20, 27));
-            const checked = await preflight(client, snapshot, preview.logs, { dryRun: Boolean(options.dryRun), now: options.now || new Date(), onStep: reportSteps(options, 27, 34) });
+            const checked = await preflight(client, snapshot, preview.logs, { onStep: reportSteps(options, 27, 34) });
             emit('info', `동일 일정 ${checked.skippedCount}건 제외, 신규 ${checked.pending.length}건 검증 완료`, 35);
             if (options.dryRun) return { mode: 'dry-run', transport: 'http', portalWrites: 0, plannedCount: preview.entryCount,
                 pendingCount: checked.pending.length, skippedCount: checked.skippedCount, totalMinutes: preview.totalMinutes, existingRecords: snapshot.records };
@@ -272,7 +270,7 @@ async function runPortalAutomation(options) {
                 // The first write (and an externally inserted duplicate) still forces a full refresh.
                 if (!snapshot) snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, (message, part) => report(message, part * .2));
                 report(`${index + 1}/${checked.pending.length} · ${log.date} 저장 전 검증`, .2);
-                const current = await preflight(client, snapshot, [log], { dryRun: false, now: options.now || new Date() });
+                const current = await preflight(client, snapshot, [log]);
                 if (!current.pending.length) { skippedCount += 1; snapshot = null; continue; }
                 const rule = current.rules.get(log.date);
                 report(`${index + 1}/${checked.pending.length} · ${log.date} 포털에 저장 중`, .4);
@@ -340,7 +338,7 @@ async function mutatePortalRecord(options) {
                 const scoped = { ...snapshot, selected: { ...assignment, before },
                     records: snapshot.records.filter((item) => !isTarget(item)), allRecords: snapshot.allRecords.filter((item) => !isTarget(item)) };
                 // Exclude only the original row while validating its replacement.
-                const checked = await preflight(client, scoped, [log], { dryRun: false, now: options.now || new Date() });
+                const checked = await preflight(client, scoped, [log]);
                 if (checked.pending.length !== 1) throw new Error('동일한 시간의 다른 일지가 이미 있습니다.');
                 key = checked.rules.get(log.date).key;
                 row = { ...row, ST_HHMI: log.start, END_HHMI: log.end, REMARK: log.content,

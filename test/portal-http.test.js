@@ -58,7 +58,6 @@ class FakePortal extends PortalHttpClient {
 
 function options(client, overrides = {}) {
     return { portalId: 'test', portalPassword: 'not-a-real-password', clientFactory: () => client,
-        now: new Date('2026-09-04T12:00:00+09:00'),
         schedule: { year: 2026, month: 9, content: '실습실 점검', portalAssignment: { scholarshipCode: '50086', workDepartmentCode: '21095' },
             regularRules: [], specialDates: { 1: { start: '1300', end: '1700' } }, vacationDates: [], extraHolidayDates: [] }, ...overrides };
 }
@@ -198,17 +197,60 @@ test('split shifts save separately with unique sequence keys, exclude lunch and 
     assert.deepEqual(client.saves.map(item => item.row.WORK_MI), ['0300', '0300', '0200']);
     assert.equal((await runPortalAutomation(opts)).skippedCount, 3);
     assert.equal(client.saves.length, 3);
-    const future = options(new FakePortal(), { now: new Date('2026-09-01T23:30:00+09:00') });
-    future.schedule.specialDates[1] = { start: '2200', end: '2400' };
-    await assert.rejects(runPortalAutomation(future), /종료되지/);
 });
 
-test('invalid rules, future work, changed responses and approval gaps block writes', async () => {
+test('ongoing and future work can be pre-entered, verified, edited and skipped on retry', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-04T10:00:00+09:00').getTime() });
+    const client = new FakePortal();
+    const opts = options(client);
+    opts.schedule.specialDates = {
+        4: [{ start: '0900', end: '1200' }, { start: '1300', end: '1700' }],
+        8: [{ start: '0900', end: '1200' }, { start: '1300', end: '1700' }],
+        30: { start: '2200', end: '2400' }
+    };
+    const dryRun = await runPortalAutomation({ ...opts, dryRun: true });
+    assert.equal(dryRun.pendingCount, 5);
+    assert.equal(dryRun.portalWrites, 0);
+    assert.equal(client.saves.length, 0);
+    const result = await runPortalAutomation(opts);
+    assert.equal(result.insertedCount, 5);
+    assert.equal(result.verifiedCount, 5);
+    assert.deepEqual(client.saves.map(item => [item.row.WORK_DT, item.row.END_HHMI]), [
+        ['20260904', '1200'], ['20260904', '1700'], ['20260908', '1200'], ['20260908', '1700'], ['20260930', '2400']
+    ]);
+    assert.equal((await runPortalAutomation(opts)).skippedCount, 5);
+    assert.equal(client.saves.length, 5);
+    const record = mapPortalRecord(client.records.find(row => row.WORK_DT === '20260908' && row.ST_HHMI === '1300'));
+    const updated = await mutatePortalRecord({ ...opts, year: 2026, month: 9, record, operation: 'update',
+        changes: { start: '1300', end: '1600', content: 'Updated planned work' } });
+    assert.equal(updated.verified, true);
+    assert.equal(client.changes.length, 1);
+    assert.equal(client.changes[0].row.END_HHMI, '1600');
+    for (const name of ['FindWork', 'Bef', 'List', 'Checkweek', 'Vacation', 'Holi']) assert.ok(client.calls.includes(name));
+});
+
+test('advance entries still honor approval periods, holidays and portal rejection without blind retry', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-04T10:00:00+09:00').getTime() });
+    for (const [arrange, expected, writes] of [
+        [client => { client.approved[0].END_DT = '20260907'; }, /기간 밖/, 0],
+        [client => { client.holidays = ['20260908']; }, /공휴일/, 0],
+        [client => { client.mode = 'reject'; }, /정확한 일지/, 1]
+    ]) {
+        const client = new FakePortal();
+        const opts = options(client);
+        opts.schedule.specialDates = { 8: { start: '0900', end: '1700' } };
+        arrange(client);
+        await assert.rejects(runPortalAutomation(opts), expected);
+        assert.equal(client.saves.length, writes);
+        assert.equal(client.records.length, 0);
+    }
+});
+
+test('invalid rules, changed responses and approval gaps block writes', async () => {
     const cases = [
         [(c, o) => { o.schedule.specialDates[1] = { start: '1305', end: '1405' }; }, /10분/],
         [(c, o) => { o.schedule.specialDates[1] = { start: '1300', end: '1330' }; }, /최소 1시간/],
         [(c, o) => { o.schedule.specialDates[1] = { start: '1300', end: '1410' }; }, /30분/],
-        [(c, o) => { o.schedule.specialDates = { 30: { start: '1300', end: '1700' } }; }, /종료되지/],
         [(c) => { c.holidays = ['20260901']; }, /공휴일/],
         [(c) => { c.mode = 'malformed'; }, /listMain/],
         [(c) => { c.approved[0].ST_DT = '20260902'; }, /기간 밖/],
