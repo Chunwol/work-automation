@@ -7,7 +7,8 @@ const test = require('node:test');
 const request = require('supertest');
 const { createApp: createActualApp } = require('../src/app');
 const createApp = (config, overrides = {}) => createActualApp(config, {
-    calendar: async () => ({ holidays: [], source: 'test', error: null }), ...overrides
+    calendar: async () => ({ holidays: [], source: 'test', error: null }),
+    verifyPortalCredentials: async () => true, ...overrides
 });
 
 function testConfig() {

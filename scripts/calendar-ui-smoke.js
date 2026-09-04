@@ -17,10 +17,18 @@ async function main() {
     const assignments = [{ scholarshipCode: '50086', workDepartmentCode: '21095', scholarshipName: '국가근로장학금(교내)', workDepartmentName: '컴퓨터공학부', startDate: '20260801', endDate: '20260824' },
         { scholarshipCode: '50064', workDepartmentCode: '21095', scholarshipName: '일반근로장학금', workDepartmentName: '컴퓨터공학부', startDate: '20260801', endDate: '20260831' }];
     const mutations = [];
+    let credentialChecks = 0;
+    let releaseCredentialCheck;
     let calendarError = null;
     const runtime = createApp({ databasePath: ':memory:', masterKey: crypto.randomBytes(32), publicDir: path.join(root, 'public'),
         cookieSecure: false, trustProxy: false, sessionTtlMs: 3600000, automationConcurrency: 1, nodeEnv: 'test' }, {
         calendar: async (year, month) => ({ holidays: year === 2026 && month === 8 ? [{ day: 15, name: '광복절' }, { day: 17, name: '대체공휴일' }] : [], source: 'test', error: calendarError }),
+        verifyPortalCredentials: async ({ portalPassword }) => {
+            credentialChecks += 1;
+            if (portalPassword !== 'fake-test-password') throw new Error('Synthetic login rejected');
+            await new Promise(resolve => { releaseCredentialCheck = resolve; });
+            return true;
+        },
         automation: {
             queryPortalRecords: async ({ year, month }) => ({ year, month, records: structuredClone(records), assignments, count: records.length }),
             runPortalAutomation: async () => { throw new Error('Unexpected school submit'); },
@@ -157,9 +165,21 @@ async function main() {
         assert.ok(await page.$(workDay(24)));
         await page.click('#portal-settings-button');
         await page.type('#portal-id', 'fake-test-id');
-        await page.type('#portal-password', 'fake-test-password');
+        await page.type('#portal-password', 'wrong-test-password');
         await page.click('#portal-form button[type="submit"]');
+        await page.waitForSelector('#portal-error:not([hidden])');
+        assert.match(await page.$eval('#portal-error', el => el.textContent), /저장하지 않았습니다/);
+        assert.equal(runtime.db.raw.prepare('SELECT COUNT(*) n FROM portal_credentials').get().n, 0);
+        await page.$eval('#portal-password', el => { el.value = ''; });
+        await page.type('#portal-password', 'fake-test-password');
+        await page.click('#portal-save-button');
+        assert.equal(await page.$eval('#portal-save-button', el => el.disabled), true);
+        await page.keyboard.press('Escape');
+        assert.ok(await page.$('#portal-dialog[open]'));
+        releaseCredentialCheck();
         await page.waitForSelector('#portal-dialog:not([open])');
+        assert.equal(credentialChecks, 2);
+        assert.equal(runtime.db.raw.prepare('SELECT COUNT(*) n FROM portal_credentials').get().n, 1);
         await page.click('#query-button');
         await page.waitForFunction(() => document.querySelector('#portal-calendar-summary').textContent.includes('19건'));
         assert.equal(await page.$$eval('.calendar-portal-record', nodes => nodes.length), 19);
@@ -226,8 +246,14 @@ async function main() {
         const dragCopy = async (from, to, accept, messagePattern) => {
             const source = await page.$(`[data-day="${from}"]`);
             const destination = await page.$(`[data-day="${to}"]`);
-            if (from === to) await source.drag(await page.$(`[data-day="${from === 1 ? 2 : 1}"]`));
-            await destination.drop(source);
+            await source.scrollIntoView();
+            const start = await source.boundingBox();
+            const end = await destination.boundingBox();
+            await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+            await page.mouse.down();
+            await page.mouse.move(start.x + start.width / 2 + 16, start.y + start.height / 2, { steps: 3 });
+            await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 12 });
+            await page.mouse.up();
             if (messagePattern) await confirmModal(accept, messagePattern);
             else assert.equal(await page.$eval('#action-confirm-dialog', el => el.open), false);
             await new Promise(resolve => setTimeout(resolve, 350));

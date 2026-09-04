@@ -1,11 +1,12 @@
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 function normalizeTime(value) {
-    const digits = String(value ?? '').replace(/\D/g, '');
-    if (digits.length !== 4) return null;
+    const text = String(value ?? '').trim();
+    if (!/^\d{2}:?\d{2}$/.test(text)) return null;
+    const digits = text.replace(':', '');
     const hour = Number(digits.slice(0, 2));
     const minute = Number(digits.slice(2, 4));
-    if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+    if (!Number.isInteger(hour) || hour < 0 || hour > 24 || (hour === 24 && minute !== 0)) return null;
     if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
     return digits;
 }
@@ -20,6 +21,20 @@ function validateTimeRange(start, end) {
     const startMinutes = timeToMinutes(start);
     const endMinutes = timeToMinutes(end);
     return startMinutes !== null && endMinutes !== null && endMinutes > startMinutes;
+}
+
+function normalizeRanges(value) {
+    const source = Array.isArray(value) ? value : value ? [value] : [];
+    if (!source.length || source.length > 8) return { error: '근무 구간은 하루 1~8개로 입력해주세요.' };
+    const ranges = source.map(range => ({ start: normalizeTime(range?.start), end: normalizeTime(range?.end) }));
+    if (ranges.some(range => !range.start || !range.end || !validateTimeRange(range.start, range.end))) {
+        return { error: '퇴근 시간은 출근 시간보다 늦어야 하며, 시간은 00:00~24:00 범위여야 합니다.' };
+    }
+    ranges.sort((a, b) => a.start.localeCompare(b.start));
+    if (ranges.some((range, index) => index > 0 && range.start < ranges[index - 1].end)) {
+        return { error: '근무 구간의 시간이 겹칩니다.' };
+    }
+    return { ranges };
 }
 
 function validateSchedulePayload(payload, yearParam, monthParam) {
@@ -53,21 +68,20 @@ function validateSchedulePayload(payload, yearParam, monthParam) {
 
     const regularRules = Array.isArray(payload?.regularRules) ? payload.regularRules : [];
     const normalizedRules = [];
-    const seenWeekdays = new Set();
+    const weekdayRanges = new Map();
     for (const rule of regularRules) {
         const day = Number(rule?.day);
-        const start = normalizeTime(rule?.start);
-        const end = normalizeTime(rule?.end);
-        if (!Number.isInteger(day) || day < 0 || day > 6 || seenWeekdays.has(day)) {
-            errors.push('요일별 반복 규칙이 중복되었거나 올바르지 않습니다.');
+        if (!Number.isInteger(day) || day < 0 || day > 6) {
+            errors.push('요일별 반복 규칙이 올바르지 않습니다.');
             continue;
         }
-        if (!start || !end || !validateTimeRange(start, end)) {
-            errors.push(`${DAYS[day] || '요일'} 반복 시간 범위가 올바르지 않습니다.`);
-            continue;
-        }
-        seenWeekdays.add(day);
-        normalizedRules.push({ day, week: DAYS[day], start, end });
+        if (!weekdayRanges.has(day)) weekdayRanges.set(day, []);
+        weekdayRanges.get(day).push(rule);
+    }
+    for (const [day, ranges] of weekdayRanges) {
+        const normalized = normalizeRanges(ranges);
+        if (normalized.error) errors.push(`${DAYS[day]}요일: ${normalized.error}`);
+        else normalizedRules.push(...normalized.ranges.map(range => ({ day, week: DAYS[day], ...range })));
     }
 
     const specialDates = payload?.specialDates && typeof payload.specialDates === 'object' && !Array.isArray(payload.specialDates)
@@ -76,17 +90,16 @@ function validateSchedulePayload(payload, yearParam, monthParam) {
     const normalizedSpecialDates = {};
     for (const [dayText, range] of Object.entries(specialDates)) {
         const day = Number(dayText);
-        const start = normalizeTime(range?.start);
-        const end = normalizeTime(range?.end);
         if (!Number.isInteger(day) || day < 1 || day > lastDay) {
             errors.push(`${dayText}일은 해당 월에 존재하지 않습니다.`);
             continue;
         }
-        if (!start || !end || !validateTimeRange(start, end)) {
-            errors.push(`${day}일의 근무시간 범위가 올바르지 않습니다.`);
+        const normalized = normalizeRanges(range);
+        if (normalized.error) {
+            errors.push(`${day}일: ${normalized.error}`);
             continue;
         }
-        normalizedSpecialDates[String(day)] = { start, end };
+        normalizedSpecialDates[String(day)] = normalized.ranges.length === 1 ? normalized.ranges[0] : normalized.ranges;
     }
 
     const normalizeDayList = (value, label) => {
@@ -135,16 +148,14 @@ function generateSchedule(schedule, excludedDays = new Set()) {
         if (excludedDays.has(day) || vacationDays.has(day) || (holidayDays.has(day) && !holidayWorkDays.has(day))) continue;
 
         const specific = schedule.specialDates?.[String(day)];
-        const recurring = (schedule.regularRules || []).find((rule) => rule.day === weekday);
-        const selected = specific || recurring;
-        if (!selected) continue;
-
-        logs.push({
+        const recurring = (schedule.regularRules || []).filter((rule) => rule.day === weekday);
+        const selected = specific ? (Array.isArray(specific) ? specific : [specific]) : recurring;
+        for (const range of [...selected].sort((a, b) => a.start.localeCompare(b.start))) logs.push({
             date: `${schedule.year}${String(schedule.month).padStart(2, '0')}${String(day).padStart(2, '0')}`,
             day,
             week: DAYS[weekday],
-            start: selected.start,
-            end: selected.end,
+            start: range.start,
+            end: range.end,
             content: schedule.content
         });
     }
@@ -259,7 +270,8 @@ function previewSchedule(schedule, excludedDays = new Set()) {
     const totalMinutes = calculateTotalWorkMinutes(logs);
     return {
         logs,
-        count: logs.length,
+        count: new Set(logs.map(log => log.date)).size,
+        entryCount: logs.length,
         totalMinutes,
         totalText: formatMinutes(totalMinutes)
     };
@@ -275,6 +287,7 @@ module.exports = {
     formatMinutes,
     generateSchedule,
     normalizeTime,
+    normalizeRanges,
     previewSchedule,
     resolveExcludedDays,
     timeToMinutes,

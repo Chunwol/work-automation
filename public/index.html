@@ -243,7 +243,7 @@
             <details>
                 <summary>처음 사용하기</summary>
                 <ol>
-                    <li>회원가입 후 내 학교 포털 계정을 연결합니다.</li>
+                    <li>회원가입 후 내 학교 포털 계정을 연결합니다. 로그인 확인에 성공한 정보만 저장합니다.</li>
                     <li>작성할 월을 고르고, <strong>배정 조회·선택</strong>에서 장학 유형과 근무지를 선택합니다.</li>
                     <li>일정을 만들고 <strong>일정 저장</strong>으로 보관합니다.</li>
                     <li><strong>기록만 조회</strong>로 기존 일지를 확인한 뒤 <strong>자동 입력 시작</strong>에서 실제 등록할 내용을 확인합니다.</li>
@@ -252,11 +252,12 @@
             <details>
                 <summary>일정 추가·복사·삭제</summary>
                 <ul>
-                    <li>날짜를 누르고 출퇴근 시간을 적용하면 수동 예정 일정이 생깁니다.</li>
+                    <li>날짜를 누르고 출퇴근 시간을 적용하면 수동 예정 일정이 생깁니다. <strong>구간 추가</strong>로 점심시간 전후처럼 하루 1~8개 구간을 나눌 수 있습니다. 구간 사이의 시간은 합계에서 제외합니다.</li>
+                    <li>시간은 오전/오후 없는 24시간제입니다. <strong>0900</strong> 또는 <strong>09:00</strong>으로 입력하고, 퇴근은 <strong>24:00</strong>까지 사용할 수 있습니다.</li>
                     <li>수동 예정 일정을 같은 월의 빈 날짜로 드래그하면 바로 시간을 복사합니다. 원본은 유지합니다.</li>
                     <li>모바일·키보드에서는 날짜 상세창의 <strong>복사할 날짜</strong>와 <strong>일정 복사</strong>를 사용하세요.</li>
                     <li>공휴일·추가 지정 휴일이거나 기존 예정 일정·포털 기록이 있는 날짜에만 확인 모달을 표시합니다. 같은 시간의 예정 일정이 이미 있으면 아무것도 바꾸지 않습니다. 근무내용과 배정은 현재 월의 공통 설정을 사용합니다.</li>
-                    <li><strong>예정 일정만 삭제</strong>는 해당 날짜만 제외합니다. 다른 날짜의 반복 일정과 포털 기록은 유지합니다.</li>
+                    <li><strong>예정 일정만 삭제</strong>는 수동 일정만 있는 날을 빈 날짜로 돌립니다. 해당 요일의 반복 일정이 있으면 그날만 제외합니다. 다른 날짜와 포털 기록은 유지합니다.</li>
                     <li>변경 후 <strong>일정 저장</strong>을 눌러 보관하세요. 예정 일정 편집·복사만으로 포털에 등록되지는 않습니다.</li>
                 </ul>
             </details>
@@ -264,7 +265,7 @@
                 <summary>요일 반복·공휴일</summary>
                 <ul>
                     <li>요일 반복은 내 계정의 현재 월에 공통 적용합니다. 다른 사용자·다른 월에는 영향을 주지 않습니다.</li>
-                    <li>날짜별 수동 시간이 반복 시간보다 우선하고, 근무 제외 설정은 그 날짜의 일정을 제외합니다.</li>
+                    <li>반복 설정도 요일마다 여러 근무 구간을 추가할 수 있습니다. 날짜별 수동 설정은 그날의 반복 구간 전체를 대신하고, 근무 제외는 그날의 모든 구간을 제외합니다.</li>
                     <li>공휴일은 빨갛게 표시하고 기본적으로 제외합니다. 실제로 일했다면 날짜 상세창에서 <strong>공휴일 근무</strong>를 선택하세요.</li>
                     <li>공휴일 근무 예외를 선택해도 학교 포털의 입력 제한을 해제하는 것은 아닙니다. 공휴일 조회 오류는 달력에 별도로 표시합니다.</li>
                 </ul>
@@ -293,7 +294,7 @@
                 <summary>계정과 개인정보</summary>
                 <ul>
                     <li>앱 로그인과 학교 포털 로그인은 별도입니다. 계정마다 일정·조회 기록·포털 정보가 분리됩니다.</li>
-                    <li>학교 포털 아이디와 비밀번호는 서버에 AES-256-GCM으로 암호화해 보관합니다. 앱 비밀번호는 복호화할 수 없는 해시로 저장합니다.</li>
+                    <li>학교 포털 아이디와 비밀번호는 로그인 확인 후 서버에 AES-256-GCM으로 암호화해 보관합니다. 앱 비밀번호는 복호화할 수 없는 해시로 저장합니다.</li>
                     <li>포털 계정 설정에서 연결 정보를 변경하거나 삭제할 수 있습니다. 연결 정보를 삭제해도 학교 포털의 일지는 삭제되지 않습니다.</li>
                 </ul>
             </details>
@@ -308,11 +309,9 @@
             </div>
             <div id="day-portal-records" class="day-portal-records" hidden></div>
             <label id="day-holiday-field" class="check-field holiday-work-field" hidden><input id="day-holiday-work" type="checkbox"><span id="day-holiday-label">공휴일 근무 · 자동 제외 해제</span></label>
-            <h3 class="day-section-title">예정 일정</h3>
-            <div class="time-row">
-                <label class="field"><span>출근</span><input id="day-start" type="time" step="300" required></label>
-                <span aria-hidden="true">→</span>
-                <label class="field"><span>퇴근</span><input id="day-end" type="time" step="300" required></label>
+            <div id="day-range-editor" data-range-editor="day">
+                <div class="range-toolbar"><h3 class="day-section-title">예정 일정</h3><button class="button button-quiet range-add" type="button" data-add-range>구간 추가</button></div>
+                <div id="day-ranges" class="range-list" data-range-list></div>
             </div>
             <label class="check-field"><input id="day-excluded" type="checkbox"><span>이 날짜를 근무에서 제외</span></label>
             <div id="day-copy-fields" class="day-copy-fields" hidden>
@@ -335,9 +334,9 @@
             <div id="portal-record-summary" class="day-portal-record"></div>
             <div id="portal-record-edit-fields">
                 <div class="time-row">
-                    <label class="field"><span>출근</span><input id="portal-record-start" type="time" required></label>
+                    <label class="field"><span>출근</span><input id="portal-record-start" class="time-input" type="text" inputmode="numeric" maxlength="5" placeholder="09:00" pattern="([01][0-9]|2[0-3]):?[0-5][0-9]" aria-label="출근 시간, 24시간제" required></label>
                     <span>→</span>
-                    <label class="field"><span>퇴근</span><input id="portal-record-end" type="time" required></label>
+                    <label class="field"><span>퇴근</span><input id="portal-record-end" class="time-input" type="text" inputmode="numeric" maxlength="5" placeholder="17:00" pattern="(([01][0-9]|2[0-3]):?[0-5][0-9]|24:?00)" aria-label="퇴근 시간, 24시간제" required></label>
                 </div>
                 <label class="field"><span>근무내용 · 100바이트 이내</span><textarea id="portal-record-content" maxlength="100" rows="3" required></textarea></label>
             </div>
@@ -355,6 +354,7 @@
                 <button class="modal-close" value="cancel" aria-label="닫기">×</button>
             </div>
             <div id="repeat-list" class="repeat-list"></div>
+            <p id="repeat-error" class="form-error" role="alert" hidden></p>
             <div class="modal-actions">
                 <button class="button button-quiet" value="cancel">취소</button>
                 <button class="button button-primary" type="submit" value="default">반복 규칙 적용</button>
@@ -370,12 +370,12 @@
             </div>
             <label class="field"><span>포털 아이디</span><input id="portal-id" autocomplete="off" maxlength="80" required></label>
             <label class="field"><span>포털 비밀번호</span><span class="password-wrap"><input id="portal-password" type="password" autocomplete="new-password" maxlength="200" required><button type="button" class="text-button password-toggle" data-target="portal-password">보기</button></span></label>
-            <p id="portal-error" class="form-error" hidden></p>
+            <p id="portal-error" class="form-error" role="alert" hidden></p>
             <div class="modal-actions split-actions">
                 <button id="delete-portal-button" class="button button-danger-quiet" type="button">등록 정보 삭제</button>
                 <span></span>
                 <button class="button button-quiet" value="cancel">취소</button>
-                <button class="button button-primary" type="submit" value="default">암호화하여 저장</button>
+                <button id="portal-save-button" class="button button-primary" type="submit" value="default">확인 후 저장</button>
             </div>
         </form>
     </dialog>

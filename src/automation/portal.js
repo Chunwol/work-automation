@@ -212,6 +212,15 @@ async function queryPortalRecords(options) {
     });
 }
 
+async function verifyPortalCredentials(options) {
+    return withSession(options, (client) => {
+        if (!client.identity?.studentNo || !client.identity?.name) {
+            throw new Error('포털 로그인 계정 정보를 확인하지 못했습니다.');
+        }
+        return true;
+    });
+}
+
 async function runPortalAutomation(options) {
     const validated = validateSchedulePayload(options.schedule);
     if (!validated.ok) throw new Error(validated.errors.join(' '));
@@ -229,7 +238,7 @@ async function runPortalAutomation(options) {
             let snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment);
             const checked = await preflight(client, snapshot, preview.logs, { dryRun: Boolean(options.dryRun), now: options.now || new Date() });
             emit('info', `동일 일정 ${checked.skippedCount}건 제외, 신규 ${checked.pending.length}건 검증 완료`, 35);
-            if (options.dryRun) return { mode: 'dry-run', transport: 'http', portalWrites: 0, plannedCount: preview.count,
+            if (options.dryRun) return { mode: 'dry-run', transport: 'http', portalWrites: 0, plannedCount: preview.entryCount,
                 pendingCount: checked.pending.length, skippedCount: checked.skippedCount, totalMinutes: preview.totalMinutes, existingRecords: snapshot.records };
             let skippedCount = checked.skippedCount;
             for (const log of checked.pending) {
@@ -252,7 +261,7 @@ async function runPortalAutomation(options) {
                 emit('success', `${log.date} API 저장 및 재조회 검증 완료`, 35 + Math.round(insertedCount / Math.max(1, checked.pending.length) * 60));
             }
             emit('success', `신규 ${insertedCount}건 저장, 기존 ${skippedCount}건 유지`, 100);
-            return { mode: 'submit', transport: 'http', plannedCount: preview.count, insertedCount, skippedCount,
+            return { mode: 'submit', transport: 'http', plannedCount: preview.entryCount, insertedCount, skippedCount,
                 verifiedCount: snapshot.records.length, totalMinutes: preview.totalMinutes,
                 year: schedule.year, month: schedule.month, records: snapshot.allRecords,
                 assignments: snapshot.assignments.map(publicAssignment) };
@@ -323,4 +332,4 @@ async function mutatePortalRecord(options) {
 }
 
 module.exports = { API_PATH, LOGIN_URL, buildLogKey, mapPortalRecord, portalMinutes, querySnapshot, preflight, buildInsertRow,
-    queryPortalRecords, runPortalAutomation, mutatePortalRecord };
+    queryPortalRecords, runPortalAutomation, mutatePortalRecord, verifyPortalCredentials };

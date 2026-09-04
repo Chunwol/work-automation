@@ -5,6 +5,7 @@ const state = {
     user: null,
     csrfToken: null,
     portalCredential: { configured: false },
+    portalCredentialSaving: false,
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
     schedule: null,
@@ -24,6 +25,7 @@ const state = {
     portalMutationOperation: null,
     portalMutationBusy: false,
     draggedSchedule: null,
+    pointerSchedule: null,
     suppressDayClickUntil: 0,
     assignmentSelectionJobId: null
 };
@@ -221,11 +223,12 @@ function daysInMonth(year, month) {
 }
 
 function timeToMinutes(value) {
-    const digits = String(value || '').replace(/\D/g, '');
-    if (digits.length !== 4) return null;
+    const text = String(value || '').trim();
+    if (!/^\d{2}:?\d{2}$/.test(text)) return null;
+    const digits = text.replace(':', '');
     const hour = Number(digits.slice(0, 2));
     const minute = Number(digits.slice(2));
-    if (hour > 23 || minute > 59) return null;
+    if (hour > 24 || minute > 59 || (hour === 24 && minute !== 0)) return null;
     return hour * 60 + minute;
 }
 
@@ -239,7 +242,25 @@ function inputTime(value) {
 }
 
 function compactTime(value) {
-    return String(value || '').replace(/\D/g, '').slice(0, 4);
+    return String(value || '').trim().replace(':', '');
+}
+
+const asRanges = value => Array.isArray(value) ? value : value ? [value] : [];
+const storedRanges = ranges => ranges.length === 1 ? ranges[0] : ranges;
+const rangeSummary = ranges => ranges.map(range => `${displayTime(range.start)} ~ ${displayTime(range.end)}`).join(', ');
+const rangeKey = ranges => JSON.stringify(ranges.map(({ start, end }) => ({ start, end })).sort((a, b) => a.start.localeCompare(b.start)));
+
+function validateRanges(ranges) {
+    if (!ranges.length || ranges.length > 8) throw new Error('근무 구간은 하루 1~8개로 입력해주세요.');
+    const sorted = ranges.map(range => ({ start: compactTime(range.start), end: compactTime(range.end) }))
+        .sort((a, b) => a.start.localeCompare(b.start));
+    for (const [index, range] of sorted.entries()) {
+        const start = timeToMinutes(range.start);
+        const end = timeToMinutes(range.end);
+        if (start === null || end === null || end <= start) throw new Error('퇴근 시간은 출근 시간보다 늦어야 하며, 시간은 00:00~24:00 범위여야 합니다.');
+        if (index && range.start < sorted[index - 1].end) throw new Error('근무 구간의 시간이 겹칩니다.');
+    }
+    return sorted;
 }
 
 function getEffectiveDay(day, schedule = state.schedule) {
@@ -248,8 +269,9 @@ function getEffectiveDay(day, schedule = state.schedule) {
     const excluded = schedule.vacationDates.includes(day) || schedule.extraHolidayDates.includes(day) || holidayExcluded;
     const specific = schedule.specialDates[String(day)] || null;
     const weekday = new Date(schedule.year, schedule.month - 1, day).getDay();
-    const recurring = schedule.regularRules.find((rule) => rule.day === weekday) || null;
-    return { excluded, specific, recurring, value: specific || recurring };
+    const recurring = schedule.regularRules.filter((rule) => rule.day === weekday);
+    const ranges = specific ? asRanges(specific) : recurring;
+    return { excluded, specific, recurring, ranges, value: ranges.length ? ranges : null };
 }
 
 function calculateClientPreview(schedule = state.schedule) {
@@ -258,14 +280,17 @@ function calculateClientPreview(schedule = state.schedule) {
     for (let day = 1; day <= daysInMonth(schedule.year, schedule.month); day += 1) {
         const entry = getEffectiveDay(day, schedule);
         if (!entry || entry.excluded || !entry.value) continue;
-        const start = timeToMinutes(entry.value.start);
-        const end = timeToMinutes(entry.value.end);
-        if (start === null || end === null || end <= start) continue;
-        logs.push({ day, start: entry.value.start, end: entry.value.end, minutes: end - start });
+        for (const range of entry.ranges) {
+            const start = timeToMinutes(range.start);
+            const end = timeToMinutes(range.end);
+            if (start === null || end === null || end <= start) continue;
+            logs.push({ day, start: range.start, end: range.end, minutes: end - start });
+        }
     }
     return {
         logs,
-        count: logs.length,
+        count: new Set(logs.map(log => log.day)).size,
+        entryCount: logs.length,
         totalMinutes: logs.reduce((sum, log) => sum + log.minutes, 0)
     };
 }
@@ -294,12 +319,12 @@ function renderCalendar() {
     for (let day = 1; day <= lastDay; day += 1) {
         const entry = getEffectiveDay(day);
         const value = entry?.value;
-        const start = value ? timeToMinutes(value.start) : null;
-        const end = value ? timeToMinutes(value.end) : null;
-        const minutes = start !== null && end !== null ? end - start : 0;
+        const ranges = entry?.ranges || [];
+        const minutes = ranges.reduce((sum, range) => sum + Math.max(0, (timeToMinutes(range.end) || 0) - (timeToMinutes(range.start) || 0)), 0);
         const records = portalRecordsForDay(day);
-        const sameAsDraft = value && !entry.excluded && records.some((record) => record.start === value.start
-            && record.end === value.end && assignmentMatches(record, state.schedule.portalAssignment));
+        const missingRanges = ranges.filter(range => !records.some(record => record.start === range.start
+            && record.end === range.end && assignmentMatches(record, state.schedule.portalAssignment)));
+        const sameAsDraft = value && !entry.excluded && missingRanges.length === 0;
         const classes = ['calendar-day'];
         const weekday = new Date(state.year, state.month - 1, day).getDay();
         const holiday = state.calendar.holidays.find((item) => item.day === day);
@@ -319,7 +344,7 @@ function renderCalendar() {
             <button class="${classes.join(' ')}" type="button" data-day="${day}" draggable="${canCopy}" aria-label="${state.month}월 ${day}일, 포털 기록 ${records.length}건, 일정 설정${canCopy ? ', 수동 예정 일정 드래그 복사 가능' : ''}">
                 <span class="date-number">${day}</span>
                 ${isHoliday ? `<span class="holiday-label" title="${escapeHtml(holiday?.name || '공휴일')}">${holidayWorked ? '근무 예외' : escapeHtml(holiday?.name || '공휴일')}</span>` : ''}
-                ${value && !entry.excluded && !sameAsDraft ? `<span class="day-time"><span>${escapeHtml(displayTime(value.start))}</span><span class="time-divider">–</span><span>${escapeHtml(displayTime(value.end))}</span></span><span class="day-hours">예정 ${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ''}</span>` : ''}
+                ${value && !entry.excluded && !sameAsDraft ? `${missingRanges.slice(0, 3).map(range => `<span class="day-time"><span>${escapeHtml(displayTime(range.start))}</span><span class="time-divider">–</span><span>${escapeHtml(displayTime(range.end))}</span></span>`).join('')}${missingRanges.length > 3 ? `<span class="portal-more">+${missingRanges.length - 3}구간</span>` : ''}<span class="day-hours">예정 ${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ''}</span>` : ''}
                 ${records.slice(0, 2).map((record) => {
                     const kind = portalRecordKind(record);
                     return `<span class="calendar-portal-record ${kind.className}" title="${escapeHtml(`${record.scholarshipName} / ${record.workDepartmentName} / ${record.confirmed ? '확인 완료' : '미확인'}`)}"><span class="portal-record-label">${escapeHtml(kind.label)}</span><span class="portal-record-time"><span>${escapeHtml(displayTime(record.start))}</span><span class="time-divider">–</span><span>${escapeHtml(displayTime(record.end))}</span></span></span>`;
@@ -343,11 +368,15 @@ function manualCopySource(day) {
     const entry = getEffectiveDay(day);
     if (!entry?.specific || entry.excluded) return null;
     return { year: state.year, month: state.month, userId: state.user?.id, day,
-        start: entry.specific.start, end: entry.specific.end };
+        ranges: asRanges(entry.specific).map(({ start, end }) => ({ start, end })) };
 }
 
 function clearScheduleDrag() {
+    const pointer = state.pointerSchedule;
+    state.pointerSchedule = null;
+    if (pointer?.button.hasPointerCapture(pointer.id)) pointer.button.releasePointerCapture(pointer.id);
     state.draggedSchedule = null;
+    document.body.classList.remove('schedule-dragging');
     $$('.drag-source, .drag-target', $('#calendar')).forEach(el => el.classList.remove('drag-source', 'drag-target'));
 }
 
@@ -356,7 +385,45 @@ function bindCalendarDay(button) {
     button.addEventListener('click', () => {
         if (Date.now() >= state.suppressDayClickUntil) openDayDialog(day);
     });
+    // Embedded browsers do not consistently deliver native HTML drag/drop.
+    button.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || event.pointerType === 'touch' || event.isPrimary === false) return;
+        const source = manualCopySource(day);
+        if (!source) return;
+        clearScheduleDrag();
+        state.pointerSchedule = { source, button, id: event.pointerId, x: event.clientX, y: event.clientY, active: false };
+        button.setPointerCapture(event.pointerId);
+    });
+    button.addEventListener('pointermove', event => {
+        const pointer = state.pointerSchedule;
+        if (!pointer || pointer.id !== event.pointerId) return;
+        if (!pointer.active && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) < 8) return;
+        pointer.active = true;
+        event.preventDefault();
+        state.draggedSchedule = pointer.source;
+        button.classList.add('drag-source');
+        document.body.classList.add('schedule-dragging');
+        $$('.drag-target', $('#calendar')).forEach(el => el.classList.remove('drag-target'));
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('#calendar [data-day]');
+        if (target && Number(target.dataset.day) !== day) target.classList.add('drag-target');
+    });
+    button.addEventListener('pointerup', event => {
+        const pointer = state.pointerSchedule;
+        if (!pointer || pointer.id !== event.pointerId) return;
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('#calendar [data-day]');
+        if (pointer.active) {
+            event.preventDefault();
+            state.suppressDayClickUntil = Date.now() + 400;
+        }
+        clearScheduleDrag();
+        if (pointer.active && target) void copyManualSchedule(pointer.source, Number(target.dataset.day));
+    });
+    button.addEventListener('pointercancel', clearScheduleDrag);
+    button.addEventListener('lostpointercapture', () => {
+        if (state.pointerSchedule?.button === button) clearScheduleDrag();
+    });
     button.addEventListener('dragstart', (event) => {
+        if (state.pointerSchedule) return event.preventDefault();
         const source = manualCopySource(day);
         if (!source || !event.dataTransfer) return event.preventDefault();
         state.draggedSchedule = source;
@@ -394,18 +461,18 @@ async function copyManualSchedule(source, targetDay) {
         || !Number.isInteger(targetDay) || targetDay < 1 || targetDay > daysInMonth(state.year, state.month)
         || source.day === targetDay) return false;
     const current = manualCopySource(source.day);
-    if (!current || current.start !== source.start || current.end !== source.end) {
+    if (!current || rangeKey(current.ranges) !== rangeKey(source.ranges)) {
         toast('원본 일정이 변경되었습니다. 다시 선택해주세요.', 'error');
         return false;
     }
     const target = getEffectiveDay(targetDay);
     const holiday = (state.schedule.holidayDates || []).includes(targetDay) || state.schedule.extraHolidayDates.includes(targetDay);
     const records = portalRecordsForDay(targetDay);
-    if (target.value && !target.excluded && target.value.start === source.start && target.value.end === source.end) {
+    if (target.value && !target.excluded && rangeKey(target.ranges) === rangeKey(source.ranges)) {
         return false;
     }
     const warnings = [];
-    if (target.value) warnings.push(`기존 예정 시간 ${displayTime(target.value.start)} ~ ${displayTime(target.value.end)}을 바꿉니다.`);
+    if (target.value) warnings.push(`기존 예정 시간 ${rangeSummary(target.ranges)}을 바꿉니다.`);
     if (holiday) warnings.push('공휴일 근무 예외로 추가합니다. 포털의 공휴일 입력 제한은 별도 적용됩니다.');
     else if (target.excluded) warnings.push('대상 날짜의 근무 제외를 해제합니다.');
     if (records.length) warnings.push(`이미 포털 기록 ${records.length}건이 있습니다. 해당 기록은 변경하지 않습니다.`);
@@ -414,7 +481,7 @@ async function copyManualSchedule(source, targetDay) {
         const recordsBefore = JSON.stringify(records);
         if (!await confirmAction({
             title: holiday ? '공휴일에 일정을 복사할까요?' : target.value ? '기존 예정 일정을 바꿀까요?' : '포털 기록이 있는 날짜입니다',
-            message: `${state.year}년 ${state.month}월 ${source.day}일 → ${targetDay}일 · ${displayTime(source.start)} ~ ${displayTime(source.end)}`,
+            message: `${state.year}년 ${state.month}월 ${source.day}일 → ${targetDay}일 · ${rangeSummary(source.ranges)}`,
             details: warnings,
             confirmLabel: target.value ? '예정 일정 교체' : '일정 복사'
         })) return false;
@@ -425,7 +492,7 @@ async function copyManualSchedule(source, targetDay) {
             return false;
         }
     }
-    state.schedule.specialDates[String(targetDay)] = { start: source.start, end: source.end };
+    state.schedule.specialDates[String(targetDay)] = storedRanges(structuredClone(source.ranges));
     state.schedule.vacationDates = state.schedule.vacationDates.filter(day => day !== targetDay);
     state.schedule.extraHolidayDates = state.schedule.extraHolidayDates.filter(day => day !== targetDay);
     if (holiday) state.schedule.holidayWorkDates = [...new Set([...(state.schedule.holidayWorkDates || []), targetDay])].sort((a, b) => a - b);
@@ -575,6 +642,34 @@ async function changeMonth(offset) {
     await loadSchedule();
 }
 
+function readRangeEditor(editor) {
+    return $$('.work-range', editor).map(row => ({ start: $('.range-start', row).value, end: $('.range-end', row).value }));
+}
+
+function syncRangeEditor(editor) {
+    const enabled = editor.dataset.rangeEditor === 'day' ? !$('#day-excluded').checked : $('input[type="checkbox"]', editor).checked;
+    const rows = $$('.work-range', editor);
+    if (editor.dataset.rangeEditor === 'repeat') $('[data-range-list]', editor).hidden = !enabled;
+    $$('.time-input', editor).forEach(input => { input.disabled = !enabled; });
+    $$('[data-remove-range]', editor).forEach(button => { button.disabled = !enabled || rows.length === 1; });
+    $('[data-add-range]', editor).disabled = !enabled || rows.length >= 8;
+}
+
+function renderRangeEditor(editor, ranges) {
+    const kind = editor.dataset.rangeEditor;
+    const label = kind === 'day' ? '예정 일정' : `${['일', '월', '화', '수', '목', '금', '토'][Number(editor.dataset.repeatDay)]}요일`;
+    $('[data-range-list]', editor).innerHTML = ranges.map((range, index) => {
+        const input = (side, name) => {
+            const id = kind === 'day' && index === 0 ? `id="day-${side}"` : '';
+            const pattern = side === 'end' ? '(([01][0-9]|2[0-3]):?[0-5][0-9]|24:?00)' : '([01][0-9]|2[0-3]):?[0-5][0-9]';
+            const value = timeToMinutes(range[side]) === null ? range[side] : displayTime(range[side]);
+            return `<label class="field repeat-time-field"><span>${name}</span><input ${id} class="range-${side} ${kind}-${side} time-input" type="text" inputmode="numeric" maxlength="5" pattern="${pattern}" value="${escapeHtml(value)}" placeholder="${side === 'start' ? '09:00' : '17:00'}" aria-label="${label} ${index + 1}구간 ${name}, 24시간제" required></label>`;
+        };
+        return `<div class="work-range"><div class="range-header"><span>근무 ${index + 1}</span><button type="button" class="range-remove" data-remove-range="${index}" aria-label="${label} ${index + 1}구간 삭제">삭제</button></div>${input('start', '출근')}<span class="range-arrow" aria-hidden="true">→</span>${input('end', '퇴근')}</div>`;
+    }).join('');
+    syncRangeEditor(editor);
+}
+
 function openDayDialog(day) {
     if (state.schedule?.year !== state.year || state.schedule?.month !== state.month) return;
     state.selectedDay = day;
@@ -583,9 +678,8 @@ function openDayDialog(day) {
     const entry = getEffectiveDay(day);
     $('#day-dialog-title').textContent = `${state.month}월 ${day}일 ${weekday}요일`;
     renderDayPortalRecords(day);
-    $('#day-start').value = inputTime(entry?.value?.start || '0900');
-    $('#day-end').value = inputTime(entry?.value?.end || '1700');
     $('#day-excluded').checked = Boolean(entry?.excluded);
+    renderRangeEditor($('#day-range-editor'), entry?.ranges.length ? entry.ranges : [{ start: '0900', end: '1700' }]);
     const holiday = (state.schedule.holidayDates || []).includes(day);
     $('#day-holiday-field').hidden = !holiday;
     $('#day-holiday-work').checked = (state.schedule.holidayWorkDates || []).includes(day);
@@ -601,18 +695,15 @@ function openDayDialog(day) {
 
 function applyDayEdit() {
     const day = state.selectedDay;
-    const start = compactTime($('#day-start').value);
-    const end = compactTime($('#day-end').value);
-    const startMinutes = timeToMinutes(start);
-    const endMinutes = timeToMinutes(end);
+    let ranges = [];
     const holiday = (state.schedule.holidayDates || []).includes(day);
     if (holiday && !$('#day-excluded').checked && !$('#day-holiday-work').checked) {
         showError($('#day-error'), '공휴일에는 공휴일 근무를 선택해야 자동 제외가 해제됩니다.');
         return false;
     }
-    if (!$('#day-excluded').checked && (startMinutes === null || endMinutes === null || endMinutes <= startMinutes)) {
-        showError($('#day-error'), '퇴근 시간은 출근 시간보다 늦어야 합니다.');
-        return false;
+    if (!$('#day-excluded').checked) {
+        try { ranges = validateRanges(readRangeEditor($('#day-range-editor'))); }
+        catch (error) { showError($('#day-error'), error.message); return false; }
     }
 
     state.schedule.vacationDates = state.schedule.vacationDates.filter((value) => value !== day);
@@ -623,7 +714,7 @@ function applyDayEdit() {
         state.schedule.vacationDates.sort((a, b) => a - b);
     } else {
         state.schedule.extraHolidayDates = state.schedule.extraHolidayDates.filter((value) => value !== day);
-        state.schedule.specialDates[String(day)] = { start, end };
+        state.schedule.specialDates[String(day)] = storedRanges(ranges);
     }
     setDirty();
     renderCalendar();
@@ -632,13 +723,17 @@ function applyDayEdit() {
 
 async function removeDayEdit() {
     const day = state.selectedDay;
-    if (!getEffectiveDay(day)?.value) return;
+    const entry = getEffectiveDay(day);
+    if (!entry?.value) return;
+    const hasRecurring = entry.recurring.length > 0;
     const revision = scheduleRevision();
     if (!await confirmAction({ title: '이 날의 예정 일정을 삭제할까요?', message: `${state.year}년 ${state.month}월 ${day}일`,
-        details: ['이 날짜만 반복 일정에서 제외합니다. 포털 기록은 삭제하지 않습니다.'], confirmLabel: '예정 일정 삭제', destructive: true })) return;
+        details: [hasRecurring ? '이 날짜만 반복 일정에서 제외합니다. 포털 기록은 삭제하지 않습니다.' : '이 날의 수동 예정 일정만 삭제합니다. 포털 기록은 삭제하지 않습니다.'], confirmLabel: '예정 일정 삭제', destructive: true })) return;
     if (!verifyScheduleRevision(revision)) return;
     delete state.schedule.specialDates[String(day)];
-    state.schedule.vacationDates = [...new Set([...state.schedule.vacationDates, day])].sort((a, b) => a - b);
+    state.schedule.vacationDates = state.schedule.vacationDates.filter(value => value !== day);
+    if (hasRecurring) state.schedule.vacationDates.push(day);
+    state.schedule.vacationDates.sort((a, b) => a - b);
     state.schedule.holidayWorkDates = (state.schedule.holidayWorkDates || []).filter((value) => value !== day);
     setDirty();
     renderCalendar();
@@ -648,40 +743,36 @@ async function removeDayEdit() {
 function renderRepeatRules() {
     const names = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
     $('#repeat-list').innerHTML = names.map((name, day) => {
-        const rule = state.schedule.regularRules.find((item) => item.day === day);
+        const enabled = state.schedule.regularRules.some((item) => item.day === day);
         return `
-            <div class="repeat-row" data-repeat-day="${day}">
-                <label class="repeat-day-field"><input type="checkbox" ${rule ? 'checked' : ''}>${name}</label>
-                <label class="repeat-time-field"><span>출근</span><input class="repeat-start" type="time" step="300" value="${inputTime(rule?.start || '0900')}" ${rule ? '' : 'disabled'} aria-label="${name} 출근 시간"></label>
-                <span>→</span>
-                <label class="repeat-time-field"><span>퇴근</span><input class="repeat-end" type="time" step="300" value="${inputTime(rule?.end || '1700')}" ${rule ? '' : 'disabled'} aria-label="${name} 퇴근 시간"></label>
+            <div class="repeat-row" data-repeat-day="${day}" data-range-editor="repeat">
+                <div class="range-toolbar"><label class="repeat-day-field"><input type="checkbox" ${enabled ? 'checked' : ''}>${name}</label><button type="button" class="button button-quiet range-add" data-add-range aria-label="${name} 구간 추가">구간 추가</button></div>
+                <div class="range-list" data-range-list></div>
             </div>`;
     }).join('');
     $$('.repeat-row').forEach((row) => {
+        const ranges = state.schedule.regularRules.filter(rule => rule.day === Number(row.dataset.repeatDay));
+        renderRangeEditor(row, ranges.length ? ranges : [{ start: '0900', end: '1700' }]);
         const checkbox = $('input[type="checkbox"]', row);
-        checkbox.addEventListener('change', () => {
-            $$('.repeat-start, .repeat-end', row).forEach((input) => { input.disabled = !checkbox.checked; });
-        });
+        checkbox.addEventListener('change', () => syncRangeEditor(row));
     });
+    showError($('#repeat-error'), '');
 }
 
 async function applyRepeatRules() {
+    showError($('#repeat-error'), '');
     const rules = [];
     for (const row of $$('.repeat-row')) {
         const enabled = $('input[type="checkbox"]', row).checked;
         if (!enabled) continue;
         const day = Number(row.dataset.repeatDay);
-        const start = compactTime($('.repeat-start', row).value);
-        const end = compactTime($('.repeat-end', row).value);
-        if (timeToMinutes(start) === null || timeToMinutes(end) <= timeToMinutes(start)) {
-            toast(`${day}번 요일의 시간 범위를 확인해주세요.`, 'error');
-            return false;
-        }
-        rules.push({ day, week: ['일', '월', '화', '수', '목', '금', '토'][day], start, end });
+        try {
+            rules.push(...validateRanges(readRangeEditor(row)).map(range => ({ day, week: ['일', '월', '화', '수', '목', '금', '토'][day], ...range })));
+        } catch (error) { showError($('#repeat-error'), `${['일', '월', '화', '수', '목', '금', '토'][day]}요일: ${error.message}`); return false; }
     }
     const preview = calculateClientPreview({ ...state.schedule, regularRules: rules });
     const duration = formatDuration(preview.totalMinutes);
-    const ruleTimes = values => JSON.stringify(values.map(({ day, start, end }) => ({ day, start, end })).sort((a, b) => a.day - b.day));
+    const ruleTimes = values => JSON.stringify(values.map(({ day, start, end }) => ({ day, start, end })).sort((a, b) => a.day - b.day || a.start.localeCompare(b.start)));
     if (ruleTimes(rules) === ruleTimes(state.schedule.regularRules)) return true;
     const revision = scheduleRevision();
     if (!await confirmAction({ title: '요일 반복 일정을 적용할까요?',
@@ -720,13 +811,18 @@ async function saveSchedule() {
 
 async function savePortalCredential(event) {
     event.preventDefault();
+    if (state.portalCredentialSaving) return;
     if (event.submitter?.value === 'cancel') {
         $('#portal-dialog').close();
         return;
     }
     showError($('#portal-error'), '');
-    const submit = event.submitter;
-    setButtonBusy(submit, true, '저장 중...');
+    const submit = $('#portal-save-button');
+    const controls = $$('#portal-form input, #portal-form button').map(control => [control, control.disabled]);
+    state.portalCredentialSaving = true;
+    $('#portal-form').setAttribute('aria-busy', 'true');
+    setButtonBusy(submit, true, '로그인 확인 중...');
+    controls.forEach(([control]) => { control.disabled = true; });
     try {
         state.portalCredential = await api('/api/portal-credentials', {
             method: 'PUT',
@@ -737,10 +833,13 @@ async function savePortalCredential(event) {
         $('#portal-dialog').close();
         state.portalSnapshot = null;
         await loadPortalSnapshot();
-        toast('포털 계정을 암호화하여 저장했습니다.', 'success');
+        toast('로그인 확인 후 포털 계정을 암호화하여 저장했습니다.', 'success');
     } catch (error) {
         showError($('#portal-error'), error.message);
     } finally {
+        state.portalCredentialSaving = false;
+        $('#portal-form').removeAttribute('aria-busy');
+        controls.forEach(([control, disabled]) => { control.disabled = disabled; });
         setButtonBusy(submit, false);
     }
 }
@@ -996,7 +1095,7 @@ async function openRunDialog() {
     const duration = formatDuration(preview.totalMinutes);
     $('#run-summary').innerHTML = `
         <div><span>대상 연월</span><strong>${state.year}. ${String(state.month).padStart(2, '0')}</strong></div>
-        <div><span>예상 입력</span><strong>${preview.count}일</strong></div>
+        <div><span>예상 입력</span><strong>${preview.count}일 · ${preview.entryCount}구간</strong></div>
         <div><span>예상 시수</span><strong>${duration.hours}시간 ${duration.minutes}분</strong></div>
         <div><span>근무 내용</span><strong>${escapeHtml(state.schedule.content)}</strong></div>
         <div class="run-assignment"><span>장학 유형</span><strong>${escapeHtml(state.schedule.portalAssignment.scholarshipName || state.schedule.portalAssignment.scholarshipCode)}</strong></div>
@@ -1083,6 +1182,30 @@ async function createUser(event) {
 }
 
 function bindEvents() {
+    window.addEventListener('blur', clearScheduleDrag);
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && state.pointerSchedule?.active) {
+            state.suppressDayClickUntil = Date.now() + 400;
+            clearScheduleDrag();
+        }
+    });
+    document.addEventListener('focusout', event => {
+        if (!event.target.matches('.time-input')) return;
+        const digits = compactTime(event.target.value);
+        if (timeToMinutes(digits) !== null) event.target.value = displayTime(digits);
+    });
+    document.addEventListener('click', event => {
+        const button = event.target.closest('[data-add-range], [data-remove-range]');
+        if (!button || button.disabled) return;
+        const editor = button.closest('[data-range-editor]');
+        const ranges = readRangeEditor(editor);
+        const adding = button.hasAttribute('data-add-range');
+        if (adding && ranges.length < 8) ranges.push({ start: '', end: '' });
+        else if (!adding && ranges.length > 1) ranges.splice(Number(button.dataset.removeRange), 1);
+        renderRangeEditor(editor, ranges);
+        const inputs = $$('.range-start', editor);
+        inputs[adding ? inputs.length - 1 : 0]?.focus();
+    });
     // Cancelling a dialog must not trigger validation of unfinished inputs.
     $$('button[value="cancel"]').forEach(button => { button.formNoValidate = true; });
     $('#action-confirm-dialog').addEventListener('close', () => {
@@ -1113,7 +1236,9 @@ function bindEvents() {
     });
     $('#day-holiday-work').addEventListener('change', (event) => {
         $('#day-excluded').checked = !event.target.checked;
+        syncRangeEditor($('#day-range-editor'));
     });
+    $('#day-excluded').addEventListener('change', () => syncRangeEditor($('#day-range-editor')));
     for (const [id, mode] of [['login-tab', 'login'], ['signup-tab', 'signup'], ['admin-setup-button', 'setup']]) {
         $(`#${id}`).addEventListener('click', () => {
             $('#password').value = '';
@@ -1170,7 +1295,10 @@ function bindEvents() {
     $('#copy-day-button').addEventListener('click', () => {
         const source = manualCopySource(state.selectedDay);
         if (!source) return;
-        if (compactTime($('#day-start').value) !== source.start || compactTime($('#day-end').value) !== source.end || $('#day-excluded').checked) {
+        let ranges;
+        try { ranges = validateRanges(readRangeEditor($('#day-range-editor'))); }
+        catch (error) { showError($('#day-error'), error.message); return; }
+        if (rangeKey(ranges) !== rangeKey(source.ranges) || $('#day-excluded').checked) {
             showError($('#day-error'), '시간이나 제외 여부를 바꿨다면 먼저 적용한 뒤 복사해주세요.');
             return;
         }
@@ -1201,6 +1329,9 @@ function bindEvents() {
         $('#portal-dialog').showModal();
     });
     $('#portal-form').addEventListener('submit', savePortalCredential);
+    $('#portal-dialog').addEventListener('cancel', event => {
+        if (state.portalCredentialSaving) event.preventDefault();
+    });
     $('#delete-portal-button').addEventListener('click', deletePortalCredential);
 
     $('#assignment-settings-button').addEventListener('click', openAssignmentSelection);

@@ -22,6 +22,7 @@ async function main() {
     const runtime = createApp({ databasePath: ':memory:', masterKey: crypto.randomBytes(32), publicDir: path.join(root, 'public'),
         cookieSecure: false, trustProxy: false, sessionTtlMs: 3600000, automationConcurrency: 1, nodeEnv: 'test' }, {
         calendar: async () => ({ holidays: [{ day: 15, name: '테스트 공휴일' }], source: 'test', error: null }),
+        verifyPortalCredentials: async () => true,
         automation: {
             queryPortalRecords: async () => ({ year, month, assignments, records: [record], count: 1 }),
             runPortalAutomation: async () => { throw new Error('Unexpected portal write'); },

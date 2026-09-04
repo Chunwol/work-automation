@@ -33,9 +33,11 @@ function requireArray(body, key, command) {
 }
 
 class PortalHttpClient {
-    constructor({ fetchImpl = globalThis.fetch, onRequest = () => {}, requestGate } = {}) {
+    constructor({ fetchImpl = globalThis.fetch, onRequest = () => {}, requestGate, loginTimeoutMs = 60000 } = {}) {
         this.fetchImpl = fetchImpl;
         this.requestGate = requestGate;
+        this.loginTimeoutMs = loginTimeoutMs;
+        this.loginSignal = null;
         this.jar = new CookieJar();
         this.onRequest = onRequest;
         this.parentKey = '';
@@ -52,18 +54,23 @@ class PortalHttpClient {
             const cookie = await this.jar.getCookieString(current);
             let response;
             try {
-                const send = () => this.fetchImpl(current, {
-                    method, body, redirect: 'manual', signal: AbortSignal.timeout(25000),
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-                        'Accept-Language': 'ko-KR,ko;q=0.9',
-                        Accept: 'application/json, text/html;q=0.9, */*;q=0.8',
-                        ...(options.referer ? { Referer: checkedUrl(options.referer) } : {}),
-                        ...(cookie ? { Cookie: cookie } : {}),
-                        ...(contentType ? { 'Content-Type': contentType } : {}),
-                        ...(method === 'POST' ? { Origin: new URL(current).origin } : {})
-                    }
-                });
+                const signal = this.loginSignal
+                    ? AbortSignal.any([this.loginSignal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000);
+                const send = () => {
+                    signal.throwIfAborted();
+                    return this.fetchImpl(current, {
+                        method, body, redirect: 'manual', signal,
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+                            'Accept-Language': 'ko-KR,ko;q=0.9',
+                            Accept: 'application/json, text/html;q=0.9, */*;q=0.8',
+                            ...(options.referer ? { Referer: checkedUrl(options.referer) } : {}),
+                            ...(cookie ? { Cookie: cookie } : {}),
+                            ...(contentType ? { 'Content-Type': contentType } : {}),
+                            ...(method === 'POST' ? { Origin: new URL(current).origin } : {})
+                        }
+                    });
+                };
                 response = await (this.requestGate ? this.requestGate.run(send) : send());
             } catch {
                 throw new Error('포털 요청이 완료되지 않았습니다. 저장 요청이었다면 재조회 후 결과를 확인하세요.');
@@ -162,6 +169,15 @@ class PortalHttpClient {
     }
 
     async login(portalId, portalPassword) {
+        this.loginSignal = AbortSignal.timeout(this.loginTimeoutMs);
+        try {
+            return await this.#authenticate(portalId, portalPassword);
+        } finally {
+            this.loginSignal = null;
+        }
+    }
+
+    async #authenticate(portalId, portalPassword) {
         const initial = await this.request(LOGIN_URL);
         const $ = cheerio.load(initial.text);
         const form = $('#loginFrm');

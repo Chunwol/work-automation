@@ -16,7 +16,7 @@ const {
 } = require('./lib/security');
 const { previewSchedule, validateSchedulePayload } = require('./lib/schedule');
 const { getCalendar } = require('./lib/calendar');
-const { queryPortalRecords, runPortalAutomation, mutatePortalRecord } = require('./automation/portal');
+const { queryPortalRecords, runPortalAutomation, mutatePortalRecord, verifyPortalCredentials } = require('./automation/portal');
 const { PortalHttpClient } = require('./automation/portal-http-client');
 const { PortalRequestGate } = require('./automation/request-gate');
 
@@ -125,7 +125,9 @@ function createRuntime(config, overrides = {}) {
         executeJob,
         concurrency: config.automationConcurrency
     });
-    return { db, queue, mutateRecord: (userId, options) => automation.mutatePortalRecord({ ...options, ...decryptCredentials(userId), clientFactory }) };
+    return { db, queue,
+        verifyCredentials: (credentials) => (overrides.verifyPortalCredentials || verifyPortalCredentials)({ ...credentials, clientFactory }),
+        mutateRecord: (userId, options) => automation.mutatePortalRecord({ ...options, ...decryptCredentials(userId), clientFactory }) };
 }
 
 function createApp(config, overrides = {}) {
@@ -133,11 +135,14 @@ function createApp(config, overrides = {}) {
     const { db, queue } = runtime;
     const calendarProvider = overrides.calendar || getCalendar;
     const activeMutations = new Set();
+    const activeVerifications = new Set();
     const app = express();
     const loginLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 7 });
     const setupLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 5 });
     const signupLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 5 });
     const jobLimiter = createFixedWindowLimiter({ windowMs: 60 * 1000, limit: 5 });
+    const credentialLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 5 });
+    const credentialIpLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 10 });
 
     if (config.trustProxy) app.set('trust proxy', 1);
     app.disable('x-powered-by');
@@ -239,7 +244,7 @@ function createApp(config, overrides = {}) {
 
     app.get('/internal/deployment', (req, res) => {
         if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return res.sendStatus(404);
-        res.json({ busy: queue.running > 0 || queue.pending.length > 0 || activeMutations.size > 0 });
+        res.json({ busy: queue.running > 0 || queue.pending.length > 0 || activeMutations.size > 0 || activeVerifications.size > 0 });
     });
 
     app.get('/api/bootstrap', (req, res) => {
@@ -383,23 +388,54 @@ function createApp(config, overrides = {}) {
         res.json(credentialSummary(req.auth.user.id));
     });
 
-    app.put('/api/portal-credentials', requireAuth, requireCsrf, (req, res) => {
+    app.put('/api/portal-credentials', requireAuth, requireCsrf, async (req, res, next) => {
         const portalId = String(req.body?.portalId || '').trim();
         const portalPassword = String(req.body?.portalPassword || '');
         if (portalId.length < 2 || portalId.length > 80 || portalPassword.length < 4 || portalPassword.length > 200) {
             return res.status(400).json({ error: '포털 아이디 또는 비밀번호 형식을 확인해주세요.' });
         }
         const userId = req.auth.user.id;
-        db.savePortalCredential(
-            userId,
-            encryptSecret(portalId, config.masterKey, `portal:${userId}:id`),
-            encryptSecret(portalPassword, config.masterKey, `portal:${userId}:password`)
-        );
-        db.addAudit(userId, 'portal_credential_saved', {}, req.ip);
-        res.json(credentialSummary(userId));
+        if (activeVerifications.has(userId) || activeMutations.has(userId) || queue.hasPendingForUser(userId)) {
+            return res.status(409).json({ error: '진행 중인 포털 작업이 있습니다. 완료 후 다시 시도해주세요.' });
+        }
+        if (activeVerifications.size >= 2) {
+            res.setHeader('Retry-After', '10');
+            return res.status(503).json({ error: '다른 로그인 확인이 진행 중입니다. 잠시 후 다시 시도해주세요.' });
+        }
+        const rates = [credentialLimiter(`user:${userId}`), credentialLimiter(`portal:${hashToken(portalId.toLowerCase())}`), credentialIpLimiter(req.ip)];
+        if (rates.some(rate => !rate.allowed)) {
+            res.setHeader('Retry-After', String(Math.max(...rates.map(rate => rate.retryAfter))));
+            return res.status(429).json({ error: '로그인 확인 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' });
+        }
+        activeVerifications.add(userId);
+        try {
+            try {
+                if (await runtime.verifyCredentials({ portalId, portalPassword }) !== true) throw new Error('Unverified credentials');
+            } catch {
+                db.addAudit(userId, 'portal_credential_verification_failed', {}, req.ip);
+                return res.status(422).json({ error: '학교 포털 로그인 또는 근로 일지 접근을 확인하지 못했습니다. 아이디·비밀번호와 포털 상태를 확인해주세요. 입력한 정보는 저장하지 않았습니다.' });
+            }
+            if (!db.getSession(hashToken(req.sessionToken))) {
+                return res.status(401).json({ error: '로그인이 만료되어 저장하지 않았습니다. 다시 로그인해주세요.' });
+            }
+            db.savePortalCredential(
+                userId,
+                encryptSecret(portalId, config.masterKey, `portal:${userId}:id`),
+                encryptSecret(portalPassword, config.masterKey, `portal:${userId}:password`)
+            );
+            db.addAudit(userId, 'portal_credential_saved', { verified: true }, req.ip);
+            res.json(credentialSummary(userId));
+        } catch (error) {
+            next(error);
+        } finally {
+            activeVerifications.delete(userId);
+        }
     });
 
     app.delete('/api/portal-credentials', requireAuth, requireCsrf, (req, res) => {
+        if (activeVerifications.has(req.auth.user.id) || activeMutations.has(req.auth.user.id) || queue.hasPendingForUser(req.auth.user.id)) {
+            return res.status(409).json({ error: '진행 중인 포털 작업이 있습니다. 완료 후 다시 시도해주세요.' });
+        }
         db.deletePortalCredential(req.auth.user.id);
         db.addAudit(req.auth.user.id, 'portal_credential_deleted', {}, req.ip);
         res.status(204).end();
@@ -427,7 +463,7 @@ function createApp(config, overrides = {}) {
             return res.status(400).json({ error: '대상 일지와 작업 종류, 실제 변경 동의를 확인해주세요.' });
         }
         if (!db.getPortalCredential(userId)) return res.status(400).json({ error: '학교 포털 계정을 먼저 등록해주세요.' });
-        if (activeMutations.has(userId) || queue.hasPendingForUser(userId)) return res.status(409).json({ error: '진행 중인 작업이 있습니다. 완료 후 다시 시도해주세요.' });
+        if (activeMutations.has(userId) || activeVerifications.has(userId) || queue.hasPendingForUser(userId)) return res.status(409).json({ error: '진행 중인 작업이 있습니다. 완료 후 다시 시도해주세요.' });
         if (!jobLimiter(String(userId)).allowed) return res.status(429).json({ error: '작업 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' });
         const job = db.createJob({ id: crypto.randomUUID(), userId, type: 'submit', year, month });
         activeMutations.add(userId);
@@ -492,6 +528,9 @@ function createApp(config, overrides = {}) {
         const month = Number(req.body?.month);
         if (!type || !Number.isInteger(year) || year < 2020 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
             return res.status(400).json({ error: '작업 종류 또는 연월이 올바르지 않습니다.' });
+        }
+        if (activeVerifications.has(req.auth.user.id)) {
+            return res.status(409).json({ error: '포털 로그인 확인 중입니다. 완료 후 다시 시도해주세요.' });
         }
         const rate = jobLimiter(String(req.auth.user.id));
         if (!rate.allowed) return res.status(429).json({ error: '작업 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' });

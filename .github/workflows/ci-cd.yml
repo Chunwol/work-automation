@@ -31,6 +31,7 @@ jobs:
       - run: npm run test:ui
       - run: npm run test:calendar-ui
       - run: npm run test:modal-ui
+      - run: npm run test:interval-ui
       - name: Keep synthetic UI test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -41,6 +42,7 @@ jobs:
             artifacts/calendar-records-*.png
             artifacts/modal-*.png
             artifacts/modal-ui-smoke.json
+            artifacts/intervals-*.png
           if-no-files-found: ignore
           retention-days: 7
 

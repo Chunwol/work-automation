@@ -12,6 +12,7 @@
     "test:ui": "node scripts/ui-smoke.js",
     "test:calendar-ui": "node scripts/calendar-ui-smoke.js",
     "test:modal-ui": "node scripts/modal-ui-smoke.js",
+    "test:interval-ui": "node scripts/interval-ui-smoke.js",
     "check:browser": "node scripts/check-browser.js",
     "check:macos": "npm run check:browser",
     "test:portal-live": "node scripts/live-web-query-smoke.js",

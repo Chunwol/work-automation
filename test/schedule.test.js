@@ -4,8 +4,38 @@ const {
     calculateTotalWorkMinutes,
     generateSchedule,
     previewSchedule,
+    normalizeTime,
+    timeToMinutes,
     validateSchedulePayload
 } = require('../src/lib/schedule');
+
+test('multiple daily intervals exclude lunch, count unique days, and preserve legacy single ranges', () => {
+    const result = validateSchedulePayload({ content: 'Split shift', regularRules: [
+        { day: 1, start: '13:00', end: '17:00' }, { day: 1, start: '09:00', end: '12:00' }
+    ], specialDates: { 1: [{ start: '0900', end: '1100' }, { start: '1200', end: '1400' }, { start: '2200', end: '2400' }],
+        2: { start: '0000', end: '0800' } } }, 2026, 6);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.regularRules.map(range => range.start), ['0900', '1300']);
+    assert.deepEqual(result.value.specialDates[2], { start: '0000', end: '0800' });
+    const preview = previewSchedule(result.value);
+    assert.equal(preview.count, 6);
+    assert.equal(preview.entryCount, 12);
+    assert.equal(preview.totalMinutes, (6 + 8 + 4 * 7) * 60);
+    assert.equal(normalizeTime('24:00'), '2400');
+    assert.equal(timeToMinutes('2400'), 1440);
+    for (const time of ['2401', '2460', '2500', '2360', 'bad0900']) assert.equal(normalizeTime(time), null);
+});
+
+test('overlapping, empty, excessive and invalid midnight intervals are rejected', () => {
+    for (const ranges of [[], [{ start: '0900', end: '1300' }, { start: '1200', end: '1700' }],
+        [{ start: '2400', end: '2400' }], [{ start: '2400', end: '0800' }], [{ start: '1600', end: '2401' }],
+        Array.from({ length: 9 }, () => ({ start: '0900', end: '1000' }))]) {
+        assert.equal(validateSchedulePayload({ content: 'Work', specialDates: { 1: ranges } }, 2026, 6).ok, false);
+    }
+    assert.equal(validateSchedulePayload({ content: 'Work', regularRules: [
+        { day: 1, start: '0900', end: '1300' }, { day: 1, start: '1200', end: '1700' }
+    ] }, 2026, 6).ok, false);
+});
 
 test('validates and normalizes a monthly schedule', () => {
     const result = validateSchedulePayload({

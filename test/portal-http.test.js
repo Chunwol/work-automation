@@ -187,6 +187,22 @@ test('all pending dates are validated before the first write', async () => {
     assert.equal(client.saves.length, 0);
 });
 
+test('split shifts save separately with unique sequence keys, exclude lunch and skip duplicates on retry', async () => {
+    const client = new FakePortal();
+    const opts = options(client);
+    opts.schedule.specialDates[1] = [{ start: '0900', end: '1200' }, { start: '1300', end: '1600' }, { start: '2200', end: '2400' }];
+    const result = await runPortalAutomation(opts);
+    assert.equal(result.plannedCount, 3);
+    assert.equal(result.insertedCount, 3);
+    assert.deepEqual(client.saves.map(item => item.row.SEQ), ['1', '2', '3']);
+    assert.deepEqual(client.saves.map(item => item.row.WORK_MI), ['0300', '0300', '0200']);
+    assert.equal((await runPortalAutomation(opts)).skippedCount, 3);
+    assert.equal(client.saves.length, 3);
+    const future = options(new FakePortal(), { now: new Date('2026-09-01T23:30:00+09:00') });
+    future.schedule.specialDates[1] = { start: '2200', end: '2400' };
+    await assert.rejects(runPortalAutomation(future), /종료되지/);
+});
+
 test('invalid rules, future work, changed responses and approval gaps block writes', async () => {
     const cases = [
         [(c, o) => { o.schedule.specialDates[1] = { start: '1305', end: '1405' }; }, /10분/],
