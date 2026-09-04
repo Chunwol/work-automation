@@ -11,6 +11,8 @@ const normalizeDate = (value) => String(value || '').replace(/\D/g, '');
 const normalizeTime = (value) => String(value || '').replace(/\D/g, '').slice(0, 4);
 const assignmentKey = (value) => `${value.scholarshipCode}:${value.workDepartmentCode}`;
 const buildLogKey = (date, start, end) => `${normalizeDate(date)}|${normalizeTime(start)}|${normalizeTime(end)}`;
+const savedRecordKey = (record) => JSON.stringify([assignmentKey(record), record.date, record.sequence,
+    record.start, record.end, record.content, record.confirmed]);
 const duration = (record) => timeToMinutes(record.end) - timeToMinutes(record.start);
 const durationText = (minutes) => `${Math.floor(minutes / 60)}시간${String(minutes % 60).padStart(2, '0')}분`;
 const durationDigits = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}${String(minutes % 60).padStart(2, '0')}`;
@@ -112,7 +114,9 @@ async function querySnapshot(client, year, month, selection, onStep = () => {}) 
         assignments.push(assignment);
     }
     const selected = selection ? assignments.find((assignment) => assignment.key === assignmentKey(selection)) : null;
-    if (selection && !selected) throw new Error('선택한 장학 유형과 근무지가 해당 연월의 승인 배정과 일치하지 않습니다.');
+    if (selection && !selected) {
+        throw Object.assign(new Error('선택한 장학 유형과 근무지의 해당 연월 승인 배정이 아직 확인되지 않았습니다.'), { code: 'PORTAL_ASSIGNMENT_PENDING' });
+    }
     const records = allRecords.filter((record) => !selection || assignmentKey(record) === assignmentKey(selection));
     records.sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
     onStep('배정과 근로일지 조회를 마쳤습니다.', 1);
@@ -210,7 +214,8 @@ function buildInsertRow(client, assignment, log, rule) {
     return row;
 }
 
-async function withSession(options, operation) {
+async function withSession(options, operation, sessionOptions = {}) {
+    if (options.sessionPool && options.sessionKey) return options.sessionPool.use(options.sessionKey, options, operation, sessionOptions);
     const client = options.clientFactory ? options.clientFactory() : new PortalHttpClient();
     try {
         options.onEvent?.({ level: 'info', message: 'HTTP로 학교 포털 로그인과 SSO 인증을 진행합니다.', progress: 1 });
@@ -229,11 +234,11 @@ async function queryPortalRecords(options) {
         options.onEvent?.({ level: 'success', message: `승인 배정 ${snapshot.assignments.length}건과 기록 ${snapshot.records.length}건을 조회했습니다.`, progress: 100 });
         return { assignments: snapshot.assignments.map(publicAssignment), records: snapshot.records, count: snapshot.records.length,
             year: options.year, month: options.month, transport: 'http' };
-    });
+    }, { readOnly: true });
 }
 
 async function verifyPortalCredentials(options) {
-    return withSession(options, (client) => {
+    return withSession({ ...options, sessionPool: null, sessionKey: null }, (client) => {
         if (!client.identity?.studentNo || !client.identity?.name) {
             throw new Error('포털 로그인 계정 정보를 확인하지 못했습니다.');
         }
@@ -254,13 +259,20 @@ async function runPortalAutomation(options) {
         if (activePortalAccounts.has(lock)) throw new Error('같은 학교 계정의 작업이 실행 중입니다. 완료 후 다시 시도해주세요.');
         activePortalAccounts.add(lock);
         let insertedCount = 0;
+        let saveAttempts = 0;
         try {
             let snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, reportSteps(options, 20, 27));
-            const checked = await preflight(client, snapshot, preview.logs, { onStep: reportSteps(options, 27, 34) });
-            emit('info', `동일 일정 ${checked.skippedCount}건 제외, 신규 ${checked.pending.length}건 검증 완료`, 35);
+            const occupiedDates = new Set(snapshot.allRecords.map(record => record.date));
+            const skippedDates = new Set(preview.logs.filter(log => occupiedDates.has(log.date)).map(log => log.date));
+            const candidates = preview.logs.filter(log => !skippedDates.has(log.date));
+            const checked = await preflight(client, snapshot, candidates, { onStep: reportSteps(options, 27, 34) });
+            checked.skippedCount += preview.logs.length - candidates.length;
+            emit('info', `기록 있는 ${skippedDates.size}일의 ${checked.skippedCount}구간 제외, 신규 ${checked.pending.length}건 검증 완료`, 35);
             if (options.dryRun) return { mode: 'dry-run', transport: 'http', portalWrites: 0, plannedCount: preview.entryCount,
-                pendingCount: checked.pending.length, skippedCount: checked.skippedCount, totalMinutes: preview.totalMinutes, existingRecords: snapshot.records };
+                pendingCount: checked.pending.length, skippedCount: checked.skippedCount, skippedDayCount: skippedDates.size,
+                totalMinutes: preview.totalMinutes, existingRecords: snapshot.allRecords };
             let skippedCount = checked.skippedCount;
+            const insertedRecords = new Set();
             if (checked.pending.length) snapshot = null;
             for (const [index, log] of checked.pending.entries()) {
                 const start = 35 + index / checked.pending.length * 60;
@@ -270,11 +282,21 @@ async function runPortalAutomation(options) {
                 // The first write (and an externally inserted duplicate) still forces a full refresh.
                 if (!snapshot) snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, (message, part) => report(message, part * .2));
                 report(`${index + 1}/${checked.pending.length} · ${log.date} 저장 전 검증`, .2);
+                // A date with any pre-existing/external record is skipped across all assignments.
+                // Verified rows inserted by this run do not block the remaining split shifts.
+                if (skippedDates.has(log.date) || snapshot.allRecords.some(record => record.date === log.date && !insertedRecords.has(savedRecordKey(record)))) {
+                    skippedDates.add(log.date);
+                    skippedCount += 1;
+                    emit('info', `${log.date}: 기존 일지가 있어 해당 날짜의 예정 구간을 건너뜁니다.`, Math.round(end));
+                    snapshot = null;
+                    continue;
+                }
                 const current = await preflight(client, snapshot, [log]);
                 if (!current.pending.length) { skippedCount += 1; snapshot = null; continue; }
                 const rule = current.rules.get(log.date);
                 report(`${index + 1}/${checked.pending.length} · ${log.date} 포털에 저장 중`, .4);
                 let saveFailed = false;
+                saveAttempts += 1;
                 try { await client.save(rule.key, buildInsertRow(client, snapshot.selected, log, rule)); }
                 catch { saveFailed = true; }
                 // A timeout can mean a committed write. Never retry Save without reading the result.
@@ -285,17 +307,20 @@ async function runPortalAutomation(options) {
                     && record.content.trim() === log.content.trim());
                 if (matches.length !== 1) throw new Error(`${log.date}: 저장${saveFailed ? ' 응답 오류 및' : ' 후'} 검증에서 정확한 일지 1건을 확인하지 못했습니다. 재조회 후 확인해주세요.`);
                 insertedCount += 1;
+                insertedRecords.add(savedRecordKey(matches[0]));
                 snapshot = verified;
                 emit('success', `${log.date} API 저장 및 재조회 검증 완료`, Math.round(end));
             }
             if (!snapshot) snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, reportSteps(options, 95, 99));
-            emit('success', `신규 ${insertedCount}건 저장, 기존 ${skippedCount}건 유지`, 100);
+            emit('success', `신규 ${insertedCount}건 저장, 기록 있는 ${skippedDates.size}일의 ${skippedCount}구간 제외`, 100);
             return { mode: 'submit', transport: 'http', plannedCount: preview.entryCount, insertedCount, skippedCount,
+                skippedDayCount: skippedDates.size,
                 verifiedCount: snapshot.records.length, totalMinutes: preview.totalMinutes,
                 year: schedule.year, month: schedule.month, records: snapshot.allRecords,
                 assignments: snapshot.assignments.map(publicAssignment) };
         } catch (error) {
             if (insertedCount) throw new Error(`${insertedCount}건은 저장·검증 완료되었습니다. 나머지는 중단: ${error.message}`);
+            if (error.code === 'PORTAL_ASSIGNMENT_PENDING' && saveAttempts === 0) error.portalWrites = 0;
             throw error;
         } finally { activePortalAccounts.delete(lock); }
     });

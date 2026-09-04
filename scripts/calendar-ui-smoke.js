@@ -98,7 +98,8 @@ async function main() {
         await page.keyboard.press('Enter');
         await page.waitForSelector('#help-dialog[open]');
         assert.equal(await page.$eval('#help-dialog', el => el.getAttribute('aria-labelledby')), 'help-title');
-        assert.equal(await page.$$eval('#help-dialog details', els => els.length), 6);
+        assert.equal(await page.$$eval('#help-dialog details', els => els.length), 7);
+        assert.match(await page.$eval('#help-dialog', el => el.textContent), /매월 자동 실행/);
         await page.keyboard.press('Tab');
         assert.equal(await page.evaluate(() => document.activeElement.tagName), 'SUMMARY');
         await page.keyboard.press('Enter');

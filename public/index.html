@@ -149,6 +149,7 @@
                             <div class="calendar-title-row"><h2>월간 일정</h2><span id="save-state" class="save-state">저장된 변경 없음</span></div>
                         </div>
                         <div class="panel-actions">
+                            <button id="previous-month-button" class="button button-quiet" type="button">이전 달 가져오기</button>
                             <button id="repeat-settings-button" class="button button-quiet" type="button">요일 반복 설정</button>
                             <button id="save-schedule-button" class="button button-primary" type="button">일정 저장</button>
                         </div>
@@ -197,6 +198,10 @@
                         <div class="run-actions">
                             <button id="query-button" class="button button-quiet" type="button">기록만 조회</button>
                             <button id="run-button" class="button button-accent" type="button">자동 입력 시작</button>
+                        </div>
+                        <div class="monthly-run-row">
+                            <span id="monthly-run-status" role="status">예약 확인 중</span>
+                            <button id="monthly-settings-button" class="text-button" type="button" aria-haspopup="dialog" aria-controls="monthly-dialog">매월 자동 실행</button>
                         </div>
                     </section>
 
@@ -283,11 +288,24 @@
                 </ul>
             </details>
             <details>
+                <summary>매월 자동 실행</summary>
+                <ul>
+                    <li><strong>포털 자동화 → 매월 자동 실행</strong>에서 날짜, 한국 시간, 실행하는 달 또는 지난달, 기본 배정을 선택하고 예약을 켭니다. 실제 학교 포털 등록 동의를 확인한 뒤 저장합니다. 기본값은 꺼짐입니다.</li>
+                    <li>대상 월에 저장된 일정·배정이 우선입니다. 별도 월 일정이 없으면 계속되는 반복 규칙과 예약의 기본 배정으로 만들며 근무내용은 비워둡니다. 편집 후 저장하지 않은 내용은 실행에 반영되지 않습니다.</li>
+                    <li>브라우저나 사용자 PC를 꺼도 서버가 실행 중이면 예약이 동작합니다. 29~31일이 없는 달에는 말일에 실행하며, 실행 시각은 한국 시간입니다. 저장할 때 이미 지난 시각은 다음 달부터 적용합니다.</li>
+                    <li>기록이 있는 날짜는 장학 유형·근무지와 관계없이 전체를 건너뜁니다. 비어 있던 날의 여러 구간은 모두 등록합니다. 배정·승인 기간·공휴일·근로시간 한도를 다시 확인합니다.</li>
+                    <li>배정 승인이 아직 확인되지 않았고 저장 요청이 없었던 경우만 다음 날 다시 확인합니다. 다음 정기 예약 전까지 하루 한 번 확인하며, 예약 설정 변경·해제로 대기를 취소할 수 있습니다. 로그인·통신·저장 오류는 재시도하지 않습니다.</li>
+                    <li>서버 중단이나 다른 작업으로 지연되면 예약 시각 24시간 이내에 실행합니다. 그 이후는 건너뜁니다. <strong>최근 작업</strong>과 예약창에서 다음 확인 시각을 볼 수 있습니다.</li>
+                    <li>포털 계정을 변경·삭제하거나 앱 계정이 비활성화되면 예약은 꺼집니다. 예약을 끄면 이후 실행은 멈추지만 이미 전송 중인 작업을 되돌리지는 않습니다. 배포 중에는 새 예약 작업을 시작하지 않습니다.</li>
+                </ul>
+            </details>
+            <details>
                 <summary>자동입력과 지원 범위</summary>
                 <ul>
                     <li>자동입력은 현재 월에 선택한 장학 유형·근무지로 진행합니다. 날짜별로 서로 다른 배정을 자동 분리하는 기능은 아직 지원하지 않습니다.</li>
-                    <li>종료된 근무만 등록할 수 있습니다. 승인기간, 공휴일, 근로시간 한도, 중복·시간 겹침을 검사하고 저장 결과를 다시 확인합니다.</li>
-                    <li>선택한 배정에 같은 날짜·시간의 일지가 있으면 중복 등록하지 않습니다. 다른 배정과 시간이 겹치면 입력을 중단합니다.</li>
+                    <li>예정된 근무도 미리 등록할 수 있습니다. 승인기간, 공휴일, 근로시간 한도를 검사하고 저장 결과를 다시 확인합니다.</li>
+                    <li>어느 배정이든 해당 날짜에 일지가 있으면 그날은 전체를 건너뜁니다. 빈 날짜의 여러 근무 구간은 모두 입력합니다. 기존 일지를 고칠 때는 날짜 상세의 수정 기능을 사용하세요.</li>
+                    <li><strong>이전 달 가져오기</strong>는 이전 달 예정 일정을 같은 일자로 복사해 현재 월의 입력 대기로 저장합니다. 현재 월 예정 일정은 교체하지만 요일 반복 규칙·배정·내용은 유지합니다. 없는 날짜는 제외하고 공휴일은 현재 월 기준이며, 이 버튼 자체는 포털에 전송하지 않습니다.</li>
                     <li>학교 응답이 불확실하면 무작정 다시 저장하지 않습니다. 기록을 조회해 결과부터 확인하세요.</li>
                     <li>학생 본인에게 허용된 조회·등록·수정·삭제를 지원합니다. 직원용 승인 처리나 다른 학생의 일지 관리는 지원하지 않습니다.</li>
                 </ul>
@@ -367,6 +385,30 @@
         </form>
     </dialog>
 
+    <dialog id="monthly-dialog" class="modal medium-modal" aria-labelledby="monthly-title">
+        <form id="monthly-form" method="dialog">
+            <div class="modal-header">
+                <div><p class="panel-kicker">MONTHLY RUN</p><h2 id="monthly-title">매월 자동 실행</h2></div>
+                <button class="modal-close" value="cancel" aria-label="닫기">×</button>
+            </div>
+            <label class="check-field switch-field"><input id="monthly-enabled" type="checkbox"><span>예약 사용</span></label>
+            <div class="monthly-fields">
+                <label class="field"><span>실행 날짜</span><select id="monthly-day" required></select></label>
+                <label class="field"><span>실행 시각 · 한국 시간</span><input id="monthly-time" class="time-input" type="text" inputmode="numeric" maxlength="5" pattern="([01]?[0-9]|2[0-3])(:?[0-5][0-9])?" placeholder="09:00" required></label>
+            </div>
+            <label class="field"><span>등록할 일정</span><select id="monthly-target"><option value="current">실행하는 달</option><option value="previous">지난달</option></select></label>
+            <label class="field"><span>기본 근로 배정</span><select id="monthly-assignment" required></select></label>
+            <p class="monthly-note">대상 월에 저장한 배정을 우선 사용합니다. 별도 일정이 없는 달은 이어지는 반복 규칙과 위 배정을 사용합니다.</p>
+            <p id="monthly-next" class="monthly-next" role="status"></p>
+            <p id="monthly-last" class="monthly-note" hidden></p>
+            <p id="monthly-error" class="form-error" role="alert" hidden></p>
+            <div class="modal-actions">
+                <button class="button button-quiet" value="cancel">취소</button>
+                <button id="monthly-save-button" class="button button-primary" value="default" type="submit">설정 저장</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="portal-dialog" class="modal medium-modal">
         <form id="portal-form" method="dialog" autocomplete="off">
             <div class="modal-header">
@@ -407,7 +449,7 @@
                 <button class="modal-close" value="cancel" aria-label="닫기">×</button>
             </div>
             <div id="run-summary" class="run-summary"></div>
-            <div class="confirm-warning"><strong>실제 포털에 저장됩니다.</strong><p>종료된 근무만 입력할 수 있습니다. 기존에 같은 날짜와 시간이 있으면 유지하고, 신규 저장 후 날짜·시간·내용을 API로 다시 검증합니다.</p></div>
+            <div class="confirm-warning"><strong>실제 포털에 저장됩니다.</strong><p>예정된 근무도 미리 입력할 수 있습니다. 기존 일지가 있는 날짜는 전체를 건너뛰고, 빈 날짜의 구간만 저장한 뒤 API로 다시 검증합니다.</p></div>
             <label class="check-field"><input id="run-confirm-checkbox" type="checkbox"><span>일정과 시간을 확인했습니다.</span></label>
             <div class="modal-actions">
                 <button class="button button-quiet" value="cancel">취소</button>

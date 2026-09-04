@@ -5,6 +5,12 @@ const LOGIN_URL = 'https://portal.dongyang.ac.kr/login_real.jsp?targetId=DMIS&Re
 const DMIS_ORIGIN = 'https://dmis.dongyang.ac.kr';
 const ALLOWED_ORIGINS = new Set(['https://portal.dongyang.ac.kr', 'https://sso.dongyang.ac.kr', DMIS_ORIGIN]);
 
+function sessionExpired() {
+    const error = new Error('포털 로그인 세션이 만료되었습니다.');
+    error.code = 'PORTAL_AUTH_EXPIRED';
+    return error;
+}
+
 function checkedUrl(value, base) {
     const url = new URL(value, base);
     if (!ALLOWED_ORIGINS.has(url.origin) || url.username || url.password) {
@@ -92,6 +98,7 @@ class PortalHttpClient {
                 current = next;
                 continue;
             }
+            if (response.status === 401) throw sessionExpired();
             if (!response.ok) throw new Error(`포털 HTTP ${response.status} 오류입니다.`);
             return { url: current, text: await response.text() };
         }
@@ -118,9 +125,13 @@ class PortalHttpClient {
             method: 'POST', body: JSON.stringify(payload), contentType: 'application/json; charset=UTF-8'
         });
         let data;
-        try { data = JSON.parse(response.text); } catch { throw new Error(`${command} 응답이 JSON이 아닙니다. 인증 또는 점검 상태를 확인해주세요.`); }
+        try { data = JSON.parse(response.text); } catch {
+            if (new URL(response.url).origin !== DMIS_ORIGIN || /id=["']loginFrm["']|로그인.*(종료|필요)|세션.*(종료|만료)/.test(response.text)) throw sessionExpired();
+            throw new Error(`${command} 응답이 JSON이 아닙니다. 인증 또는 점검 상태를 확인해주세요.`);
+        }
         if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${command} 응답 형식이 올바르지 않습니다.`);
-        if (data.dmMain?.errMessage || /로그인.*(종료|필요)|세션.*(종료|만료)/.test(String(data.dmMain?.strMessage || ''))) {
+        if (/로그인.*(종료|필요)|세션.*(종료|만료)/.test(`${data.dmMain?.errMessage || ''} ${data.dmMain?.strMessage || ''}`)) throw sessionExpired();
+        if (data.dmMain?.errMessage) {
             throw new Error(`${command} 요청을 포털이 거절했습니다. 로그인 세션 또는 입력 조건을 확인해주세요.`);
         }
         return data;
@@ -194,7 +205,25 @@ class PortalHttpClient {
         await this.navigate('https://portal.dongyang.ac.kr/proc/Login.do?targetId=DMIS&RelayState=/', {
             method: 'POST', body: fields.toString(), contentType: 'application/x-www-form-urlencoded', referer: initial.url
         });
-        onStage('SSO 인증 완료, 근로 메뉴 접근 권한을 확인합니다.', 12);
+        return this.#initializeSession(onStage);
+    }
+
+    async refreshSession(onStage = () => {}) {
+        if (!this.identity) throw sessionExpired();
+        this.loginSignal = AbortSignal.timeout(this.loginTimeoutMs);
+        try {
+            onStage('기존 포털 세션의 접속 시간을 연장합니다.', 2);
+            const reset = await this.json('/sys.Main.do', { param: { strCommand: ['Resettime'] } }, 'Resettime');
+            if (!reset.dmMain || typeof reset.dmMain !== 'object' || Array.isArray(reset.dmMain)) {
+                throw new Error('포털 세션 연장 응답 형식이 변경되었습니다.');
+            }
+            return await this.#initializeSession(onStage, this.identity.studentNo);
+        }
+        finally { this.loginSignal = null; }
+    }
+
+    async #initializeSession(onStage, expectedStudentNo = null) {
+        onStage(expectedStudentNo ? '기존 세션의 근로 메뉴 접근 권한을 확인합니다.' : 'SSO 인증 완료, 근로 메뉴 접근 권한을 확인합니다.', 12);
         const menu = await this.json('/sys.Main.do', {
             param: { MENU_ID: ['SubWorkSchoE_SCH'], OPRT_ROLE_ID: [''], strCommand: ['MenuAuth'] }
         }, 'MenuAuth');
@@ -205,6 +234,9 @@ class PortalHttpClient {
         }, 'Header');
         const identity = requireArray(header, 'systemInfo', 'Header')[0];
         if (!identity?.PGUSER_MEMBER_NO || !identity?.PGUSER_NM) throw new Error('포털 로그인 계정 정보를 확인하지 못했습니다.');
+        if (expectedStudentNo && String(identity.PGUSER_MEMBER_NO) !== expectedStudentNo) {
+            throw new Error('포털 세션의 학생 정보가 바뀌어 재사용을 중단했습니다. 다시 연결해주세요.');
+        }
         this.identity = { studentNo: String(identity.PGUSER_MEMBER_NO), name: String(identity.PGUSER_NM) };
         onStage('장학 유형과 근무지 선택 목록을 불러옵니다.', 18);
         this.catalog = await this.command('OnLoad');

@@ -293,12 +293,21 @@ test('invalid rules, changed responses and approval gaps block writes', async ()
     }
 });
 
-test('overlapping work in another approved department is blocked', async () => {
+test('any existing date in another approved department is skipped without blocking empty dates', async () => {
     const client = new FakePortal();
     client.approved.push({ SCHO_CD: '50064', WORK_DEPT_CD: '31001', ST_DT: '20260901', END_DT: '20260930' });
     client.records.push({ STUDENT_NO: 'test-student', SCHO_CD: '50064', WORK_DEPT_CD: '31001', WORK_DT: '20260901', ST_HHMI: '1200', END_HHMI: '1400' });
-    await assert.rejects(runPortalAutomation(options(client)), /겹칩니다/);
+    const opts = options(client);
+    opts.schedule.specialDates[1] = [{ start: '0900', end: '1100' }, { start: '1500', end: '1700' }];
+    const dryRun = await runPortalAutomation({ ...opts, dryRun: true });
+    assert.equal(dryRun.skippedCount, 2);
+    assert.equal(dryRun.skippedDayCount, 1);
     assert.equal(client.saves.length, 0);
+    opts.schedule.specialDates[2] = { start: '1300', end: '1700' };
+    const result = await runPortalAutomation(opts);
+    assert.equal(result.insertedCount, 1);
+    assert.equal(result.skippedCount, 2);
+    assert.equal(client.saves[0].row.WORK_DT, '20260902');
 });
 
 test('term weekly cap includes previous-month hours when configured by portal', async () => {
@@ -388,7 +397,11 @@ test('live assignment, duplicate and semester-limit changes still stop later wri
         };
         const opts = options(client);
         opts.schedule.specialDates[2] = { start: '1300', end: '1700' };
-        await assert.rejects(runPortalAutomation(opts), /1건은 저장.*나머지는 중단/);
+        if (change === 'overlap') {
+            const result = await runPortalAutomation(opts);
+            assert.equal(result.skippedCount, 1);
+            assert.equal(result.skippedDayCount, 1);
+        } else await assert.rejects(runPortalAutomation(opts), /1건은 저장.*나머지는 중단/);
         assert.equal(client.saves.length, 1, change);
     }
 });
@@ -427,4 +440,36 @@ test('query reports real intermediate stages and performs no writes', async () =
     assert.ok(events.some(event => event.message.includes('누적 근로시간')));
     assert.equal(events.at(-1).progress, 100);
     assert.equal(client.saves.length, 0);
+});
+
+test('approval retry is typed only when FindWork lacks the assignment and no save was attempted', async () => {
+    const client = new FakePortal();
+    client.approved = [];
+    await assert.rejects(runPortalAutomation(options(client)), error => error.code === 'PORTAL_ASSIGNMENT_PENDING' && error.portalWrites === 0);
+    assert.equal(client.saves.length, 0);
+    const partial = new FakePortal();
+    const save = partial.save.bind(partial);
+    partial.save = async (key, row) => { await save(key, row); partial.approved = []; };
+    await assert.rejects(runPortalAutomation(options(partial)), error => error.portalWrites !== 0);
+    assert.equal(partial.saves.length, 1);
+});
+
+test('confirmed and non-overlapping existing records skip the entire date; external rows stop remaining split shifts', async () => {
+    const client = new FakePortal();
+    client.records.push({ STUDENT_NO: 'test-student', SCHO_CD: '50086', WORK_DEPT_CD: '21095',
+        WORK_DT: '20260901', SEQ: '1', ST_HHMI: '0900', END_HHMI: '1000', CONFIRM_YN: 'Y' });
+    assert.equal((await runPortalAutomation(options(client))).skippedDayCount, 1);
+    assert.equal(client.saves.length, 0);
+    const external = new FakePortal();
+    const save = external.save.bind(external);
+    external.save = async (key, row) => {
+        await save(key, row);
+        external.records.push({ ...row, SEQ: '2', ST_HHMI: '1100', END_HHMI: '1200', REMARK: 'External record' });
+    };
+    const opts = options(external);
+    opts.schedule.specialDates[1] = [{ start: '0900', end: '1000' }, { start: '1300', end: '1400' }];
+    const result = await runPortalAutomation(opts);
+    assert.equal(result.insertedCount, 1);
+    assert.equal(result.skippedCount, 1);
+    assert.equal(external.saves.length, 1);
 });

@@ -33,6 +33,7 @@ jobs:
       - run: npm run test:modal-ui
       - run: npm run test:interval-ui
       - run: npm run test:auto-query-ui
+      - run: npm run test:monthly-ui
       - name: Keep synthetic UI test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -46,6 +47,7 @@ jobs:
             artifacts/intervals-*.png
             artifacts/repeat-layout*.png
             artifacts/repeat-layout.json
+            artifacts/monthly-*.png
           if-no-files-found: ignore
           retention-days: 7
 

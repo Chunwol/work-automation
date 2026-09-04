@@ -14,6 +14,7 @@
     "test:modal-ui": "node scripts/modal-ui-smoke.js",
     "test:interval-ui": "node scripts/interval-ui-smoke.js",
     "test:auto-query-ui": "node scripts/auto-query-ui-smoke.js",
+    "test:monthly-ui": "node scripts/monthly-ui-smoke.js",
     "check:browser": "node scripts/check-browser.js",
     "check:macos": "npm run check:browser",
     "test:portal-live": "node scripts/live-web-query-smoke.js",

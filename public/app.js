@@ -27,7 +27,10 @@ const state = {
     draggedSchedule: null,
     pointerSchedule: null,
     suppressDayClickUntil: 0,
-    assignmentSelectionJobId: null
+    assignmentSelectionJobId: null,
+    monthlyAutomation: null,
+    monthlyAssignments: [],
+    monthlySaving: false
 };
 
 const portalSnapshots = new Map();
@@ -257,7 +260,105 @@ async function bootstrap() {
     state.csrfToken = data.csrfToken;
     state.portalCredential = data.portalCredential;
     showDashboard();
-    await Promise.all([loadSchedule(), loadJobs()]);
+    await Promise.all([loadSchedule(), loadJobs(), loadMonthlyAutomation()]);
+}
+
+function monthlyDateLabel(value) {
+    return new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+async function loadMonthlyAutomation() {
+    const userId = state.user?.id;
+    if (!userId) return null;
+    try {
+        const data = await api('/api/monthly-automation');
+        if (state.user?.id !== userId) return null;
+        state.monthlyAutomation = data.automation;
+        $('#monthly-run-status').textContent = data.automation.enabled
+            ? `${monthlyDateLabel(data.automation.retryAt || data.automation.nextRunAt)} ${data.automation.retryAt ? '승인 재확인' : '예약'}` : '예약 꺼짐';
+        return data.automation;
+    } catch (error) {
+        if (state.user?.id === userId) $('#monthly-run-status').textContent = '예약 상태 조회 실패';
+        return null;
+    }
+}
+
+function syncMonthlyFields() {
+    const disabled = state.monthlySaving || !$('#monthly-enabled').checked;
+    $$('#monthly-day, #monthly-time, #monthly-target, #monthly-assignment').forEach(input => { input.disabled = disabled; });
+}
+
+async function openMonthlySettings() {
+    if (state.monthlySaving) return;
+    const button = $('#monthly-settings-button');
+    setButtonBusy(button, true, '불러오는 중...');
+    try {
+        const settings = await loadMonthlyAutomation();
+        if (!settings) { toast('예약 설정을 불러오지 못했습니다. 다시 시도해주세요.', 'error'); return; }
+        $('#monthly-enabled').checked = settings.enabled;
+        $('#monthly-day').innerHTML = Array.from({ length: 31 }, (_, index) => `<option value="${index + 1}">매월 ${index + 1}일</option>`).join('') + '<option value="0">매월 말일</option>';
+        $('#monthly-day').value = String(settings.day);
+        $('#monthly-time').value = displayTime(settings.time);
+        $('#monthly-target').value = settings.targetMonth;
+        state.monthlyAssignments = [settings.assignment, state.schedule?.portalAssignment, ...state.portalAssignments]
+            .filter(Boolean).filter((item, index, list) => list.findIndex(other => assignmentMatches(other, item)) === index);
+        const selected = settings.assignment || state.schedule?.portalAssignment;
+        $('#monthly-assignment').innerHTML = '<option value="">배정을 선택하세요</option>' + state.monthlyAssignments.map((assignment, index) =>
+            `<option value="${index}" ${assignmentMatches(assignment, selected) ? 'selected' : ''}>${escapeHtml(assignment.scholarshipName || assignment.scholarshipCode)} · ${escapeHtml(assignment.workDepartmentName || assignment.workDepartmentCode)}</option>`).join('');
+        $('#monthly-next').textContent = settings.enabled ? `다음 ${settings.retryAt ? '배정 승인 재확인' : '실행'} ${monthlyDateLabel(settings.retryAt || settings.nextRunAt)} (한국 시간)` : '예약을 켜면 브라우저를 닫아도 서버에서 실행합니다.';
+        $('#monthly-last').hidden = !settings.lastRun;
+        $('#monthly-last').textContent = settings.lastRun ? `최근 예약: ${jobTitle(settings.lastRun)} · ${statusLabel(settings.lastRun.status)}${settings.lastRun.errorMessage ? ` · ${settings.lastRun.errorMessage}` : ''}` : '';
+        showError($('#monthly-error'), '');
+        syncMonthlyFields();
+        if (!$('#monthly-dialog').open) $('#monthly-dialog').showModal();
+    } finally { setButtonBusy(button, false); }
+}
+
+async function saveMonthlySettings(event) {
+    event.preventDefault();
+    if (state.monthlySaving) return;
+    if (event.submitter?.value === 'cancel') return $('#monthly-dialog').close();
+    const enabled = $('#monthly-enabled').checked;
+    const assignmentIndex = $('#monthly-assignment').value;
+    const body = { enabled, day: Number($('#monthly-day').value), time: compactTime($('#monthly-time').value),
+        targetMonth: $('#monthly-target').value, assignment: assignmentIndex === '' ? null : state.monthlyAssignments[Number(assignmentIndex)],
+        revision: state.monthlyAutomation?.revision, confirmed: enabled };
+    showError($('#monthly-error'), '');
+    if (enabled && !state.portalCredential.configured) return showError($('#monthly-error'), '학교 포털 계정을 먼저 연결해주세요.');
+    if (enabled && !body.assignment) return showError($('#monthly-error'), '배정 조회·선택에서 근로 배정을 확인한 뒤 예약해주세요.');
+    if (enabled && !/^([01]\d|2[0-3])[0-5]\d$/.test(body.time)) return showError($('#monthly-error'), '00:00~23:59 사이의 시각을 입력해주세요.');
+    const userId = state.user?.id;
+    const controls = $$('#monthly-form input, #monthly-form select, #monthly-form button').map(control => [control, control.disabled]);
+    state.monthlySaving = true;
+    try {
+        if (enabled) {
+            if (!await confirmAction({ title: '매월 자동 등록을 예약할까요?',
+                message: `매월 ${body.day || '말'}일 ${displayTime(body.time)} (한국 시간) · ${body.targetMonth === 'previous' ? '지난달' : '실행하는 달'} 일정`,
+                details: ['브라우저가 닫혀 있어도 서버에서 실제 학교 포털에 등록합니다.',
+                    ...(body.day > 28 ? ['지정한 날짜가 없는 달은 말일에 실행합니다.'] : []),
+                    '실행 시점에 저장된 일정·배정을 사용하며, 새 달은 이어지는 반복 규칙과 기본 배정을 사용합니다.',
+                    '기록이 있는 날짜는 전체를 건너뜁니다. 배정 승인 대기만 다음 날 재확인하며 로그인·통신·저장 오류는 재시도하지 않습니다.',
+                    ...(state.dirty ? ['현재 편집한 일정도 앱에 저장합니다.'] : [])], confirmLabel: '자동 등록 예약' })) return;
+            if (userId !== state.user?.id) return;
+            if (state.dirty && !await saveSchedule({ quiet: true })) return;
+        }
+        controls.forEach(([control]) => { control.disabled = true; });
+        $('#monthly-form').setAttribute('aria-busy', 'true');
+        setButtonBusy($('#monthly-save-button'), true, '저장 중...');
+        const data = await api('/api/monthly-automation', { method: 'PUT', body });
+        if (userId !== state.user?.id) return;
+        state.monthlyAutomation = data.automation;
+        $('#monthly-dialog').close();
+        await loadMonthlyAutomation();
+        toast(enabled ? '매월 자동 실행을 예약했습니다.' : '예약 실행을 껐습니다. 이미 실행 중인 작업은 결과를 확인해주세요.', 'success');
+    } catch (error) { showError($('#monthly-error'), error.message); }
+    finally {
+        state.monthlySaving = false;
+        $('#monthly-form').removeAttribute('aria-busy');
+        controls.forEach(([control, disabled]) => { control.disabled = disabled; });
+        setButtonBusy($('#monthly-save-button'), false);
+        syncMonthlyFields();
+    }
 }
 
 function daysInMonth(year, month) {
@@ -711,6 +812,45 @@ async function changeMonth(offset) {
     await loadSchedule();
 }
 
+async function copyPreviousMonth() {
+    if (scheduleSaving || state.schedule?.year !== state.year || state.schedule?.month !== state.month) return;
+    const revision = scheduleRevision();
+    const button = $('#previous-month-button');
+    const previous = new Date(state.year, state.month - 2, 1);
+    if (previous.getFullYear() < 2020) return toast('이전 달을 불러올 수 없습니다.', 'error');
+    setButtonBusy(button, true, '불러오는 중...');
+    try {
+        const data = await api(`/api/schedules/${previous.getFullYear()}/${previous.getMonth() + 1}`);
+        if (!verifyScheduleRevision(revision)) return;
+        if (data.calendar?.error) throw new Error('이전 달 공휴일 조회에 실패했습니다. 잠시 후 다시 시도해주세요.');
+        const logs = data.preview.logs;
+        if (!logs.length) return toast('이전 달에 복사할 예정 일정이 없습니다.', 'error');
+        const lastDay = daysInMonth(state.year, state.month);
+        const specialDates = {};
+        for (const log of logs) {
+            if (log.day > lastDay) continue;
+            (specialDates[log.day] ||= []).push({ start: log.start, end: log.end });
+        }
+        const copiedDays = Object.keys(specialDates).length;
+        if (!copiedDays) return toast('현재 월에 복사할 수 있는 날짜가 없습니다.', 'error');
+        const missingDays = new Set(logs.filter(log => log.day > lastDay).map(log => log.day)).size;
+        if (!await confirmAction({ title: '이전 달 일정을 가져올까요?',
+            message: `${previous.getMonth() + 1}월 일정 ${copiedDays}일을 ${state.month}월의 같은 일자로 복사합니다.`,
+            details: ['현재 월의 예정 일정을 교체하고 앱에 입력 대기로 저장합니다. 실제 포털 일지는 변경하지 않습니다.',
+                '요일 반복 규칙·현재 근로 배정·근무내용은 유지합니다. 공휴일은 이번 달 기준으로 제외합니다.',
+                ...(missingDays ? [`이번 달에 없는 날짜 ${missingDays}일은 제외합니다.`] : []),
+                '포털 등록은 자동 입력 실행 또는 설정한 매월 예약 시에만 진행합니다.'], confirmLabel: '입력 대기로 저장' })) return;
+        if (!verifyScheduleRevision(revision)) return;
+        state.schedule.specialDates = specialDates;
+        state.schedule.vacationDates = Array.from({ length: lastDay }, (_, index) => index + 1).filter(day => !specialDates[day]);
+        state.schedule.holidayWorkDates = [];
+        setDirty(true);
+        renderCalendar();
+        if (await saveSchedule({ quiet: true })) toast('이전 달 일정을 입력 대기로 저장했습니다. 포털에는 전송하지 않았습니다.', 'success');
+    } catch (error) { toast(error.message, 'error'); }
+    finally { setButtonBusy(button, false); }
+}
+
 function readRangeEditor(editor) {
     return $$('.work-range', editor).map(row => ({ start: $('.range-start', row).value, end: $('.range-end', row).value }));
 }
@@ -947,6 +1087,7 @@ async function savePortalCredential(event) {
         $('#portal-dialog').close();
         resetPortalReads();
         await loadPortalSnapshot();
+        await loadMonthlyAutomation();
         scheduleAutoPortalQuery();
         toast('로그인 확인 후 포털 계정을 암호화하여 저장했습니다.', 'success');
     } catch (error) {
@@ -974,6 +1115,7 @@ async function deletePortalCredential() {
         $('#portal-dialog').close();
         resetPortalReads();
         await loadPortalSnapshot();
+        await loadMonthlyAutomation();
         toast('포털 계정 정보를 삭제했습니다.');
     } catch (error) {
         showError($('#portal-error'), error.message);
@@ -988,14 +1130,15 @@ function statusLabel(status) {
 
 function jobTitle(job) {
     const operation = job.summary?.operation;
-    return `${job.year}년 ${job.month}월 ${operation === 'delete' ? '포털 일지 삭제' : operation === 'update' ? '포털 일지 수정' : job.type === 'query' ? '기록 조회' : '자동 입력'}`;
+    return `${job.year}년 ${job.month}월 ${operation === 'delete' ? '포털 일지 삭제' : operation === 'update' ? '포털 일지 수정' : job.type === 'query' ? '기록 조회' : job.triggerSource === 'monthly' ? '예약 자동 입력' : '자동 입력'}`;
 }
 
 function jobSummary(job) {
     if (!job.summary) return '';
+    if (job.summary.skipped && job.summary.reason) return job.summary.reason;
     if (job.summary.operation) return `${formatPortalDate(job.summary.date)} ${job.summary.operation === 'delete' ? '삭제' : '수정'} · 재조회 검증 완료`;
     if (job.type === 'submit') {
-        return `입력 ${job.summary.insertedCount || 0}건 · 중복 제외 ${job.summary.skippedCount || 0}건 · 검증 완료`;
+        return `입력 ${job.summary.insertedCount || 0}건 · ${job.summary.skippedDayCount !== undefined ? `기록 있는 ${job.summary.skippedDayCount}일 제외` : `중복 제외 ${job.summary.skippedCount || 0}건`} · 검증 완료`;
     }
     if (Array.isArray(job.summary.records)) {
         const totalMinutes = job.summary.records.reduce((sum, record) => {
@@ -1096,6 +1239,7 @@ async function loadJobs() {
     const active = state.jobs.find((job) => ['queued', 'running'].includes(job.status));
     if (active) subscribeToJob(active.id);
     await loadPortalSnapshot();
+    await loadMonthlyAutomation();
 }
 
 async function loadJobDetails(id) {
@@ -1131,6 +1275,7 @@ function subscribeToJob(id) {
                 state.portalSnapshotError = job.errorMessage || '포털 조회에 실패했습니다. 기록만 조회로 다시 시도해주세요.';
             }
             void loadPortalSnapshot({ preserveError: job.status !== 'succeeded' }).then(() => scheduleAutoPortalQuery());
+            if (job.triggerSource === 'monthly') void loadMonthlyAutomation();
             if (!quietJobs.delete(job.id)) toast(job.status === 'succeeded' ? '작업이 완료되었습니다.' : '작업이 실패했습니다. 로그를 확인해주세요.', job.status === 'succeeded' ? 'success' : 'error');
         }
     });
@@ -1293,7 +1438,7 @@ async function openRunDialog() {
     const duration = formatDuration(preview.totalMinutes);
     $('#run-summary').innerHTML = `
         <div><span>대상 연월</span><strong>${state.year}. ${String(state.month).padStart(2, '0')}</strong></div>
-        <div><span>예상 입력</span><strong>${preview.count}일 · ${preview.entryCount}구간</strong></div>
+        <div><span>예정 일정 · 기존 일자 제외 전</span><strong>${preview.count}일 · ${preview.entryCount}구간</strong></div>
         <div><span>예상 시수</span><strong>${duration.hours}시간 ${duration.minutes}분</strong></div>
         <div><span>근무 내용</span><strong>${escapeHtml(state.schedule.content || '미입력')}</strong></div>
         <div class="run-assignment"><span>장학 유형</span><strong>${escapeHtml(state.schedule.portalAssignment.scholarshipName || state.schedule.portalAssignment.scholarshipCode)}</strong></div>
@@ -1380,6 +1525,11 @@ async function createUser(event) {
 }
 
 function bindEvents() {
+    $('#previous-month-button').addEventListener('click', copyPreviousMonth);
+    $('#monthly-settings-button').addEventListener('click', openMonthlySettings);
+    $('#monthly-form').addEventListener('submit', saveMonthlySettings);
+    $('#monthly-enabled').addEventListener('change', syncMonthlyFields);
+    $('#monthly-dialog').addEventListener('cancel', event => { if (state.monthlySaving) event.preventDefault(); });
     let selectTimeOnClick = null;
     document.addEventListener('pointerdown', event => {
         selectTimeOnClick = event.target.matches('.time-input') && document.activeElement !== event.target ? event.target : null;
@@ -1396,8 +1546,12 @@ function bindEvents() {
         if (event.key === 'Enter' && !event.isComposing && event.target.matches('.time-input')) {
             event.preventDefault();
             const form = event.target.form;
-            if (['day-form', 'repeat-form'].includes(form?.id)) form.requestSubmit($('button[type="submit"]', form));
+            if (['day-form', 'repeat-form', 'monthly-form'].includes(form?.id)) form.requestSubmit($('button[type="submit"]', form));
             else if (form?.id === 'portal-record-form') $('#portal-record-confirm').focus();
+        } else if (event.key === 'Enter' && !event.isComposing && event.target.matches('dialog input:not([type="checkbox"]):not([type="radio"])')) {
+            event.preventDefault();
+            const submit = $('button[type="submit"]:not(:disabled)', event.target.form);
+            if (submit) event.target.form.requestSubmit(submit);
         }
         if (event.key === 'Escape' && state.pointerSchedule?.active) {
             state.suppressDayClickUntil = Date.now() + 400;
@@ -1427,8 +1581,15 @@ function bindEvents() {
         const inputs = $$('.range-start', editor);
         inputs[adding ? inputs.length - 1 : 0]?.focus();
     });
-    // Cancelling a dialog must not trigger validation of unfinished inputs.
-    $$('button[value="cancel"]').forEach(button => { button.formNoValidate = true; });
+    // Cancel is not a submit action: implicit Enter submission belongs to Save/Apply.
+    $$('button[value="cancel"]').forEach(button => {
+        button.type = 'button';
+        button.formNoValidate = true;
+        button.addEventListener('click', () => {
+            const dialog = button.closest('dialog');
+            if (dialog?.dispatchEvent(new Event('cancel', { cancelable: true }))) dialog.close('cancel');
+        });
+    });
     $('#action-confirm-dialog').addEventListener('close', () => {
         const resolve = pendingConfirmation;
         pendingConfirmation = null;
@@ -1508,7 +1669,7 @@ function bindEvents() {
             state.portalCredential = data.portalCredential || { configured: false };
             $('#auth-form').reset();
             showDashboard();
-            await Promise.all([loadSchedule(), loadJobs()]);
+            await Promise.all([loadSchedule(), loadJobs(), loadMonthlyAutomation()]);
         } catch (error) {
             showError($('#auth-error'), error.message);
         } finally {
@@ -1615,6 +1776,8 @@ function bindEvents() {
         state.csrfToken = null;
         state.portalCredential = { configured: false };
         state.portalSnapshot = null;
+        state.monthlyAutomation = null;
+        state.monthlyAssignments = [];
         state.portalReadVersion += 1;
         state.scheduleReadVersion += 1;
         state.jobs = [];

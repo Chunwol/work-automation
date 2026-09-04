@@ -19,6 +19,8 @@ const { getCalendar } = require('./lib/calendar');
 const { queryPortalRecords, runPortalAutomation, mutatePortalRecord, verifyPortalCredentials } = require('./automation/portal');
 const { PortalHttpClient } = require('./automation/portal-http-client');
 const { PortalRequestGate } = require('./automation/request-gate');
+const { MonthlyScheduler, validateMonthlySettings } = require('./lib/monthly-scheduler');
+const { PortalSessionPool } = require('./automation/session-pool');
 
 const SESSION_COOKIE = 'worklog_session';
 
@@ -86,18 +88,24 @@ function createRuntime(config, overrides = {}) {
     const db = overrides.db || createDatabase(config.databasePath);
     const automation = overrides.automation || { queryPortalRecords, runPortalAutomation, mutatePortalRecord };
     const requestGate = new PortalRequestGate({ intervalMs: config.portalRequestIntervalMs });
-    const clientFactory = () => new PortalHttpClient({ requestGate });
+    const clientFactory = overrides.portalClientFactory || (() => new PortalHttpClient({ requestGate }));
+    const portalSessions = new PortalSessionPool({ clientFactory });
 
     const decryptCredentials = (userId) => {
         const credential = db.getPortalCredential(userId);
         if (!credential) throw new Error('학교 포털 계정이 등록되지 않았습니다.');
         return {
+            sessionKey: `${userId}:${crypto.createHash('sha256').update(credential.portal_id_encrypted).update(credential.portal_password_encrypted).digest('hex')}`,
+            sessionPool: portalSessions,
             portalId: decryptSecret(credential.portal_id_encrypted, config.masterKey, `portal:${userId}:id`),
             portalPassword: decryptSecret(credential.portal_password_encrypted, config.masterKey, `portal:${userId}:password`)
         };
     };
 
     const executeJob = async (item, onEvent) => {
+        if (item.scheduled && (!db.getPublicUser(item.userId)?.isActive || !db.getMonthlyAutomation(item.userId).enabled)) {
+            throw new Error('예약 실행이 꺼졌거나 계정이 비활성화되어 등록을 중단했습니다.');
+        }
         const credentials = decryptCredentials(item.userId);
         if (item.type === 'query') {
             return automation.queryPortalRecords({
@@ -123,9 +131,15 @@ function createRuntime(config, overrides = {}) {
     const queue = overrides.queue || new JobQueue({
         db,
         executeJob,
+        onFailure: (item, error) => {
+            if (item.scheduled && error.code === 'PORTAL_ASSIGNMENT_PENDING' && error.portalWrites === 0) {
+                const retryAt = db.scheduleApprovalRetry(item.id, (overrides.now?.() || new Date()).toISOString());
+                if (retryAt) db.addJobLog(item.id, 'info', '근로 배정 승인 대기: 다음 날 같은 시각에 다시 확인합니다.');
+            }
+        },
         concurrency: config.automationConcurrency
     });
-    return { db, queue,
+    return { db, queue, portalSessions,
         verifyCredentials: (credentials) => (overrides.verifyPortalCredentials || verifyPortalCredentials)({ ...credentials, clientFactory }),
         mutateRecord: (userId, options) => automation.mutatePortalRecord({ ...options, ...decryptCredentials(userId), clientFactory }) };
 }
@@ -136,6 +150,10 @@ function createApp(config, overrides = {}) {
     const calendarProvider = overrides.calendar || getCalendar;
     const activeMutations = new Set();
     const activeVerifications = new Set();
+    const scheduler = new MonthlyScheduler({ db, queue, calendar: calendarProvider,
+        activeUsers: activeMutations, isBusy: userId => activeMutations.has(userId) || activeVerifications.has(userId),
+        paused: () => Boolean(config.maintenanceFile && fs.existsSync(config.maintenanceFile)),
+        now: overrides.now || (() => new Date()) });
     const app = express();
     const loginLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 7 });
     const setupLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 5 });
@@ -349,8 +367,9 @@ function createApp(config, overrides = {}) {
         }
     });
 
-    app.post('/api/logout', requireAuth, requireCsrf, (req, res) => {
+    app.post('/api/logout', requireAuth, requireCsrf, async (req, res) => {
         db.deleteSession(hashToken(req.sessionToken));
+        await runtime.portalSessions.invalidateUser(req.auth.user.id);
         db.addAudit(req.auth.user.id, 'logout', {}, req.ip);
         clearSessionCookie(res);
         res.status(204).end();
@@ -376,6 +395,7 @@ function createApp(config, overrides = {}) {
                 return res.status(400).json({ error: '현재 비밀번호가 일치하지 않습니다.' });
             }
             db.updatePassword(userRow.id, await hashPassword(newPassword));
+            await runtime.portalSessions.invalidateUser(userRow.id);
             const csrfToken = startSession(res, userRow.id);
             db.addAudit(userRow.id, 'password_changed', {}, req.ip);
             return res.json({ ok: true, csrfToken });
@@ -423,6 +443,7 @@ function createApp(config, overrides = {}) {
                 encryptSecret(portalId, config.masterKey, `portal:${userId}:id`),
                 encryptSecret(portalPassword, config.masterKey, `portal:${userId}:password`)
             );
+            await runtime.portalSessions.invalidateUser(userId);
             db.addAudit(userId, 'portal_credential_saved', { verified: true }, req.ip);
             res.json(credentialSummary(userId));
         } catch (error) {
@@ -432,11 +453,12 @@ function createApp(config, overrides = {}) {
         }
     });
 
-    app.delete('/api/portal-credentials', requireAuth, requireCsrf, (req, res) => {
+    app.delete('/api/portal-credentials', requireAuth, requireCsrf, async (req, res) => {
         if (activeVerifications.has(req.auth.user.id) || activeMutations.has(req.auth.user.id) || queue.hasPendingForUser(req.auth.user.id)) {
             return res.status(409).json({ error: '진행 중인 포털 작업이 있습니다. 완료 후 다시 시도해주세요.' });
         }
         db.deletePortalCredential(req.auth.user.id);
+        await runtime.portalSessions.invalidateUser(req.auth.user.id);
         db.addAudit(req.auth.user.id, 'portal_credential_deleted', {}, req.ip);
         res.status(204).end();
     });
@@ -451,6 +473,32 @@ function createApp(config, overrides = {}) {
         // Account replacement invalidates earlier snapshots, including jobs queued before the replacement.
         const snapshot = credential ? db.getPortalSnapshot(req.auth.user.id, year, month, credential.updated_at) : null;
         res.json({ snapshot });
+    });
+
+    app.get('/api/monthly-automation', requireAuth, (req, res) => {
+        res.json({ automation: db.getMonthlyAutomation(req.auth.user.id) });
+    });
+
+    app.put('/api/monthly-automation', requireAuth, requireCsrf, (req, res) => {
+        const validated = validateMonthlySettings(req.body);
+        if (validated.error) return res.status(400).json({ error: validated.error });
+        if (!Number.isInteger(req.body.revision) || req.body.revision < 0) return res.status(400).json({ error: '예약 설정을 다시 불러와주세요.' });
+        const userId = req.auth.user.id;
+        if (validated.value.enabled) {
+            if (!db.getPortalCredential(userId)) return res.status(400).json({ error: '학교 포털 계정을 먼저 연결해주세요.' });
+            if (activeMutations.has(userId) || activeVerifications.has(userId) || queue.hasPendingForUser(userId)) {
+                return res.status(409).json({ error: '진행 중인 포털 작업이 있습니다. 완료 후 예약을 설정해주세요.' });
+            }
+        }
+        try {
+            db.saveMonthlyAutomation(userId, validated.value, req.body.revision, (overrides.now?.() || new Date()).toISOString());
+        } catch (error) {
+            if (error.code === 'MONTHLY_CONFLICT') return res.status(409).json({ error: error.message });
+            throw error;
+        }
+        db.addAudit(userId, validated.value.enabled ? 'monthly_automation_enabled' : 'monthly_automation_disabled',
+            { day: validated.value.day, time: validated.value.time, targetMonth: validated.value.targetMonth }, req.ip);
+        res.json({ automation: db.getMonthlyAutomation(userId) });
     });
 
     app.post('/api/portal-records/:year/:month/mutate', requireAuth, requireCsrf, async (req, res) => {
@@ -648,7 +696,7 @@ function createApp(config, overrides = {}) {
         }
     });
 
-    app.patch('/api/admin/users/:id', requireAuth, requireAdmin, requireCsrf, (req, res) => {
+    app.patch('/api/admin/users/:id', requireAuth, requireAdmin, requireCsrf, async (req, res) => {
         const userId = Number(req.params.id);
         const target = db.getPublicUser(userId);
         if (!target) return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
@@ -662,6 +710,7 @@ function createApp(config, overrides = {}) {
             return res.status(400).json({ error: '현재 로그인한 관리자 계정은 비활성화하거나 일반 사용자로 변경할 수 없습니다.' });
         }
         const user = db.updateUser(userId, { displayName, role, isActive });
+        if (!isActive) await runtime.portalSessions.invalidateUser(userId);
         db.addAudit(req.auth.user.id, 'user_updated', { targetUserId: userId, role, isActive }, req.ip);
         res.json({ user });
     });
@@ -675,6 +724,7 @@ function createApp(config, overrides = {}) {
                 return res.status(400).json({ error: '새 비밀번호는 10~128자로 입력해주세요.' });
             }
             db.updatePassword(userId, await hashPassword(password));
+            await runtime.portalSessions.invalidateUser(userId);
             db.addAudit(req.auth.user.id, 'user_password_reset', { targetUserId: userId }, req.ip);
             res.status(204).end();
         } catch (error) {
@@ -702,7 +752,7 @@ function createApp(config, overrides = {}) {
         res.status(500).json({ error: '서버 처리 중 오류가 발생했습니다.' });
     });
 
-    return { app, ...runtime };
+    return { app, ...runtime, scheduler };
 }
 
 module.exports = {

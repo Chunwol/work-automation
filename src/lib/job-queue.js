@@ -1,9 +1,10 @@
 const { EventEmitter } = require('events');
 
 class JobQueue {
-    constructor({ db, executeJob, concurrency = 1 }) {
+    constructor({ db, executeJob, concurrency = 1, onFailure = () => {} }) {
         this.db = db;
         this.executeJob = executeJob;
+        this.onFailure = onFailure;
         this.concurrency = Math.max(1, concurrency);
         this.pending = [];
         this.running = 0;
@@ -67,6 +68,8 @@ class JobQueue {
             const message = String(error?.message || '알 수 없는 오류');
             this.db.failJob(item.id, message);
             this.db.addJobLog(item.id, 'error', message);
+            try { await this.onFailure(item, error); }
+            catch { this.db.addJobLog(item.id, 'error', '재실행 예약에 실패했습니다. 작업 결과를 직접 확인해주세요.'); }
         } finally {
             this.emitSnapshot(item.id);
         }

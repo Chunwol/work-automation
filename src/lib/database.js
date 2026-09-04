@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { nextOccurrence, nextDayOccurrence } = require('./monthly-scheduler');
 
 function nowIso() {
     return new Date().toISOString();
@@ -59,6 +60,7 @@ function toJob(row, logs = undefined) {
         id: row.id,
         userId: row.user_id,
         type: row.type,
+        triggerSource: row.trigger_source || 'manual',
         year: row.schedule_year,
         month: row.schedule_month,
         status: row.status,
@@ -160,6 +162,24 @@ function createDatabase(databasePath) {
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS monthly_automations (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            settings_json TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            next_run_at TEXT,
+            revision INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS monthly_runs (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            run_month INTEGER NOT NULL,
+            due_at TEXT NOT NULL,
+            job_id TEXT NOT NULL REFERENCES jobs(id),
+            PRIMARY KEY (user_id, run_month)
+        );
+        CREATE INDEX IF NOT EXISTS idx_monthly_due ON monthly_automations(enabled, next_run_at);
+
         CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
         CREATE INDEX IF NOT EXISTS idx_schedules_user_month ON schedules(user_id, year, month);
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at DESC);
@@ -168,6 +188,13 @@ function createDatabase(databasePath) {
     `);
 
     const scheduleColumns = new Set(db.pragma('table_info(schedules)').map((column) => column.name));
+    if (!db.pragma('table_info(jobs)').some(column => column.name === 'trigger_source')) {
+        db.exec("ALTER TABLE jobs ADD COLUMN trigger_source TEXT NOT NULL DEFAULT 'manual'");
+    }
+    const monthlyColumns = new Set(db.pragma('table_info(monthly_runs)').map(column => column.name));
+    for (const [column, type] of [['retry_at', 'TEXT'], ['automation_revision', 'INTEGER'], ['attempt_count', 'INTEGER NOT NULL DEFAULT 1']]) {
+        if (!monthlyColumns.has(column)) db.exec(`ALTER TABLE monthly_runs ADD COLUMN ${column} ${type}`);
+    }
     if (!scheduleColumns.has('portal_assignment_json')) {
         db.exec('ALTER TABLE schedules ADD COLUMN portal_assignment_json TEXT');
     }
@@ -262,9 +289,31 @@ function createDatabase(databasePath) {
         deleteUserSessions: db.prepare('DELETE FROM sessions WHERE user_id = ?'),
         purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
         createJob: db.prepare(`
-            INSERT INTO jobs (id, user_id, type, schedule_year, schedule_month, status, progress, created_at)
-            VALUES (@id, @userId, @type, @year, @month, 'queued', 0, @now)
+            INSERT INTO jobs (id, user_id, type, schedule_year, schedule_month, status, progress, created_at, trigger_source)
+            VALUES (@id, @userId, @type, @year, @month, 'queued', 0, @now, @triggerSource)
         `),
+        getMonthlyAutomation: db.prepare('SELECT * FROM monthly_automations WHERE user_id = ?'),
+        dueMonthlyAutomations: db.prepare(`SELECT m.* FROM monthly_automations m JOIN users u ON u.id = m.user_id
+            WHERE m.enabled = 1 AND u.is_active = 1 AND m.next_run_at <= ? ORDER BY m.next_run_at, m.user_id LIMIT 25`),
+        saveMonthlyAutomation: db.prepare(`INSERT INTO monthly_automations (user_id, settings_json, enabled, next_run_at, updated_at)
+            VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET settings_json = excluded.settings_json,
+            enabled = excluded.enabled, next_run_at = excluded.next_run_at, revision = monthly_automations.revision + 1, updated_at = excluded.updated_at`),
+        disableMonthlyAutomation: db.prepare(`UPDATE monthly_automations SET enabled = 0, next_run_at = NULL,
+            revision = revision + 1, updated_at = ? WHERE user_id = ? AND enabled = 1`),
+        monthlyRunExists: db.prepare('SELECT 1 FROM monthly_runs WHERE user_id = ? AND run_month = ?'),
+        createMonthlyRun: db.prepare('INSERT INTO monthly_runs (user_id, run_month, due_at, job_id, automation_revision) VALUES (?, ?, ?, ?, ?)'),
+        clearApprovalRetries: db.prepare('UPDATE monthly_runs SET retry_at = NULL WHERE user_id = ?'),
+        monthlyRunForJob: db.prepare('SELECT * FROM monthly_runs WHERE job_id = ?'),
+        scheduleApprovalRetry: db.prepare('UPDATE monthly_runs SET retry_at = ? WHERE job_id = ?'),
+        dueApprovalRetries: db.prepare(`SELECT r.*, j.schedule_year, j.schedule_month FROM monthly_runs r
+            JOIN monthly_automations m ON m.user_id = r.user_id JOIN users u ON u.id = r.user_id JOIN jobs j ON j.id = r.job_id
+            WHERE r.retry_at <= ? AND m.enabled = 1 AND u.is_active = 1 AND r.automation_revision = m.revision
+            ORDER BY r.retry_at LIMIT 25`),
+        nextApprovalRetry: db.prepare(`SELECT r.retry_at FROM monthly_runs r JOIN monthly_automations m ON m.user_id = r.user_id
+            WHERE r.user_id = ? AND m.enabled = 1 AND r.automation_revision = m.revision AND r.retry_at IS NOT NULL ORDER BY r.retry_at LIMIT 1`),
+        claimApprovalRetry: db.prepare('UPDATE monthly_runs SET job_id = ?, retry_at = NULL, attempt_count = attempt_count + 1 WHERE job_id = ? AND retry_at = ?'),
+        advanceMonthlyRun: db.prepare('UPDATE monthly_automations SET next_run_at = ?, revision = revision + 1 WHERE user_id = ?'),
+        lastMonthlyJob: db.prepare('SELECT j.* FROM monthly_runs r JOIN jobs j ON j.id = r.job_id WHERE r.user_id = ? ORDER BY r.due_at DESC LIMIT 1'),
         getJob: db.prepare('SELECT * FROM jobs WHERE id = ?'),
         listUserJobs: db.prepare('SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'),
         latestPortalSnapshot: db.prepare(`
@@ -332,6 +381,64 @@ function createDatabase(databasePath) {
         return getSchedule(userId, schedule.year, schedule.month);
     });
 
+    function monthlySettings(row, userId) {
+        return {
+            userId: row?.user_id || userId, day: 1, time: '0900', targetMonth: 'current', assignment: null,
+            ...parseJson(row?.settings_json, {}), enabled: Boolean(row?.enabled), timezone: 'Asia/Seoul',
+            nextRunAt: row?.next_run_at || null, revision: row?.revision || 0, updatedAt: row?.updated_at || null
+        };
+    }
+
+    const saveMonthlyAutomation = db.transaction((userId, value, expectedRevision, now = nowIso()) => {
+        const current = monthlySettings(statements.getMonthlyAutomation.get(userId), userId);
+        if (expectedRevision !== current.revision) {
+            const error = new Error('예약 설정이나 실행 상태가 바뀌었습니다. 설정창을 다시 열어 확인해주세요.');
+            error.code = 'MONTHLY_CONFLICT';
+            throw error;
+        }
+        const settings = { day: current.day, time: current.time, targetMonth: current.targetMonth, assignment: current.assignment, ...value };
+        const nextRunAt = settings.enabled ? nextOccurrence(settings, now, month => Boolean(statements.monthlyRunExists.get(userId, month))) : null;
+        statements.saveMonthlyAutomation.run(userId, JSON.stringify(settings), settings.enabled ? 1 : 0, nextRunAt, now);
+        statements.clearApprovalRetries.run(userId);
+        return monthlySettings(statements.getMonthlyAutomation.get(userId), userId);
+    });
+
+    // The durable monthly claim and job are committed together before any portal request.
+    const claimMonthlyRun = db.transaction((settings, run) => {
+        const current = statements.getMonthlyAutomation.get(settings.userId);
+        if (!current?.enabled || current.revision !== settings.revision || current.next_run_at !== settings.nextRunAt) return null;
+        if (!statements.findUserById.get(settings.userId)?.is_active) return null;
+        statements.advanceMonthlyRun.run(run.nextRunAt, settings.userId);
+        if (statements.monthlyRunExists.get(settings.userId, run.runMonth)) return null;
+        statements.createJob.run({ id: run.id, userId: settings.userId, type: 'submit', year: run.year, month: run.month, now: run.now, triggerSource: 'monthly' });
+        statements.createMonthlyRun.run(settings.userId, run.runMonth, settings.nextRunAt, run.id, settings.revision + 1);
+        statements.addAudit.run(settings.userId, 'monthly_run_claimed', JSON.stringify({ jobId: run.id, dueAt: settings.nextRunAt, year: run.year, month: run.month }), null, run.now);
+        return toJob(statements.getJob.get(run.id));
+    });
+
+    const scheduleApprovalRetry = db.transaction((jobId, now = nowIso()) => {
+        const run = statements.monthlyRunForJob.get(jobId);
+        if (!run) return null;
+        const current = statements.getMonthlyAutomation.get(run.user_id);
+        if (!current?.enabled || current.revision !== run.automation_revision || !statements.findUserById.get(run.user_id)?.is_active) return null;
+        const retryAt = nextDayOccurrence(monthlySettings(current), now);
+        if (retryAt >= current.next_run_at) return null;
+        statements.scheduleApprovalRetry.run(retryAt, jobId);
+        return retryAt;
+    });
+
+    const claimApprovalRetry = db.transaction((retry, id, now = nowIso()) => {
+        const current = statements.getMonthlyAutomation.get(retry.user_id);
+        if (!current?.enabled || current.revision !== retry.automation_revision || !statements.findUserById.get(retry.user_id)?.is_active) return null;
+        if (now >= current.next_run_at) return null;
+        const latest = statements.monthlyRunForJob.get(retry.job_id);
+        if (!latest || latest.retry_at !== retry.retry_at || latest.retry_at > now) return null;
+        statements.createJob.run({ id, userId: retry.user_id, type: 'submit', year: retry.schedule_year, month: retry.schedule_month, now, triggerSource: 'monthly' });
+        statements.claimApprovalRetry.run(id, retry.job_id, retry.retry_at);
+        statements.addAudit.run(retry.user_id, 'approval_retry_claimed', JSON.stringify({ jobId: id, previousJobId: retry.job_id }), null, now);
+        return toJob(statements.getJob.get(id));
+    });
+
     return {
         raw: db,
         close: () => db.close(),
@@ -354,16 +461,33 @@ function createDatabase(databasePath) {
             statements.updatePassword.run(passwordHash, nowIso(), userId);
             statements.deleteUserSessions.run(userId);
         },
-        updateUser(userId, { displayName, role, isActive }) {
+        updateUser: db.transaction((userId, { displayName, role, isActive }) => {
             statements.updateUserState.run(displayName, role, isActive ? 1 : 0, nowIso(), userId);
-            if (!isActive) statements.deleteUserSessions.run(userId);
+            if (!isActive) {
+                statements.deleteUserSessions.run(userId);
+                statements.disableMonthlyAutomation.run(nowIso(), userId);
+            }
             return toPublicUser(statements.findUserById.get(userId));
-        },
-        savePortalCredential(userId, portalIdEncrypted, portalPasswordEncrypted) {
+        }),
+        savePortalCredential: db.transaction((userId, portalIdEncrypted, portalPasswordEncrypted) => {
             statements.upsertCredential.run({ userId, portalIdEncrypted, portalPasswordEncrypted, now: nowIso() });
-        },
+            statements.disableMonthlyAutomation.run(nowIso(), userId);
+        }),
         getPortalCredential: (userId) => statements.getCredential.get(userId) || null,
-        deletePortalCredential: (userId) => statements.deleteCredential.run(userId).changes > 0,
+        deletePortalCredential: db.transaction(userId => {
+            statements.disableMonthlyAutomation.run(nowIso(), userId);
+            return statements.deleteCredential.run(userId).changes > 0;
+        }),
+        getMonthlyAutomation(userId) {
+            return { ...monthlySettings(statements.getMonthlyAutomation.get(userId), userId),
+                retryAt: statements.nextApprovalRetry.get(userId)?.retry_at || null, lastRun: toJob(statements.lastMonthlyJob.get(userId)) };
+        },
+        saveMonthlyAutomation,
+        claimMonthlyRun,
+        scheduleApprovalRetry,
+        claimApprovalRetry,
+        listDueApprovalRetries: now => statements.dueApprovalRetries.all(now),
+        listDueMonthlyAutomations: now => statements.dueMonthlyAutomations.all(now).map(row => monthlySettings(row)),
         getSchedule,
         getRecurringRules,
         saveSchedule,
@@ -382,8 +506,8 @@ function createDatabase(databasePath) {
         },
         deleteSession: (tokenHash) => statements.deleteSession.run(tokenHash),
         purgeExpiredSessions: () => statements.purgeSessions.run(nowIso()).changes,
-        createJob({ id, userId, type, year, month }) {
-            statements.createJob.run({ id, userId, type, year, month, now: nowIso() });
+        createJob({ id, userId, type, year, month, triggerSource = 'manual' }) {
+            statements.createJob.run({ id, userId, type, year, month, now: nowIso(), triggerSource });
             return toJob(statements.getJob.get(id));
         },
         getJob(id, includeLogs = false) {
