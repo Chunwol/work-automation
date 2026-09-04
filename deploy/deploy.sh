@@ -12,7 +12,8 @@ case "$hash" in *[!a-f0-9]*) exit 64 ;; esac
 [ "$digest" != "$hash" ] && [ "${#hash}" -eq 64 ] || exit 64
 image="ghcr.io/chunwol/work-automation@$digest"
 cd "$base"
-mkdir .deploy-lock || { printf 'A deployment is already running.\n' >&2; exit 75; }
+exec 8> .deploy.lock
+flock -n 8 || { printf 'A deployment is already running.\n' >&2; exit 75; }
 registry=''
 cleanup() {
     rm -f "$base/data/.deployment-pause"
@@ -20,7 +21,6 @@ cleanup() {
         rm -f "$registry/config.json"
         rmdir "$registry" 2>/dev/null || true
     fi
-    rmdir "$base/.deploy-lock"
 }
 trap cleanup EXIT
 registry=$(mktemp -d "$base/.registry.XXXXXX")

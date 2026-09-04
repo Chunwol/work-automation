@@ -39,6 +39,8 @@ The root-owned deploy script accepts only this repository's immutable image dige
 Run `install-polling.sh` after installing the scripts. `deployment.log` records errors.
 Creating `/volume1/work-automation/.auto-deploy-paused` pauses the updater; removing
 that file resumes it. Use this before a manual rollback or maintenance.
+Kernel file locks prevent overlapping deployments and renewals, and are released
+automatically when a process exits or the NAS restarts.
 
 Before replacement, new API writes are briefly paused and existing portal jobs must
 finish. If work stays active, deployment is deferred without stopping the container.
@@ -59,7 +61,10 @@ then install `nginx.conf` after `nginx -t` succeeds. Never change other virtual 
 The production certificate uses ZeroSSL ACME. Supply EAB credentials privately at
 initial account registration, never in Git or CI logs. Certbot's root-only account
 and renewal files retain the CA selection, so renewal needs no EAB key in the script.
-Run `install-renewal.sh` once to schedule `bin/renew-tls.sh` twice daily and monitor failures.
+Run `install-renewal.sh` once to schedule `bin/renew-tls.sh` at 03:21 and 15:21
+(NAS local time). Certbot renews when due, before expiration, and retries on the next
+scheduled run after a failure. nginx reloads only when the certificate changes.
+Check `certbot-logs/renewal.log` and NAS system logs for failures.
 DSM upgrades or reverse-proxy changes can regenerate nginx/cron configuration;
 verify this custom host and its renewal job after such operations.
 
