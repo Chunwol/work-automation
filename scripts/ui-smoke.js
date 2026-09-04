@@ -55,11 +55,15 @@ async function main() {
     fs.mkdirSync(artifactDir, { recursive: true });
     const runtime = createApp({ databasePath: ':memory:', masterKey: crypto.randomBytes(32),
         publicDir: path.resolve(__dirname, '..', 'public'), cookieSecure: false, trustProxy: false,
-        sessionTtlMs: 3600000, automationConcurrency: 1, nodeEnv: 'test' });
+        sessionTtlMs: 3600000, automationConcurrency: 1, nodeEnv: 'test' }, {
+        calendar: async () => ({ holidays: [], source: 'UI fixture', error: null })
+    });
     const server = runtime.app.listen(0, '127.0.0.1');
     await new Promise((resolve) => server.once('listening', resolve));
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
-    const browser = await puppeteer.launch({ headless: true });
+    // Hosted Linux CI uses only this synthetic local app, never a real portal session.
+    const browser = await puppeteer.launch({ headless: true,
+        args: process.env.GITHUB_ACTIONS === 'true' && process.platform === 'linux' ? ['--no-sandbox'] : [] });
     const page = await browser.newPage();
     const errors = [];
     page.on('console', (message) => {
@@ -180,5 +184,5 @@ async function main() {
 
 main().catch((error) => {
     console.error(error.stack || error.message);
-    process.exitCode = 1;
+    process.exit(1);
 });

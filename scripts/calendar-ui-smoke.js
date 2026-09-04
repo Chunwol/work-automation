@@ -38,7 +38,9 @@ async function main() {
     });
     const server = runtime.app.listen(0, '127.0.0.1');
     await new Promise(resolve => server.once('listening', resolve));
-    const browser = await puppeteer.launch({ headless: true });
+    // Hosted Linux CI uses only this synthetic local app, never a real portal session.
+    const browser = await puppeteer.launch({ headless: true,
+        args: process.env.GITHUB_ACTIONS === 'true' && process.platform === 'linux' ? ['--no-sandbox'] : [] });
     const page = await browser.newPage();
     const errors = [];
     const nativeDialogs = [];
@@ -309,4 +311,4 @@ async function main() {
         runtime.db.close();
     }
 }
-main().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+main().catch(error => { console.error(error.stack || error.message); process.exit(1); });
