@@ -25,8 +25,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npx puppeteer browsers install chrome --install-deps
+      - run: npm ci --no-audit --no-fund
+      - run: sudo env "PATH=$PATH" "HOME=$HOME" npx puppeteer browsers install chrome --install-deps
       - run: npm test
       - run: npm run test:ui
       - run: npm run test:calendar-ui

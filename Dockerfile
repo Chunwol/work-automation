@@ -3,7 +3,7 @@ WORKDIR /app
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 FROM node:24-alpine
 LABEL org.opencontainers.image.source="https://github.com/Chunwol/work-automation"

@@ -52,7 +52,10 @@ the restricted CI key cannot rewrite its own permissions or host configuration.
 Point the `work` DNS record to the NAS. Install the HTTP challenge-only virtual host
 first, obtain an independent certificate using the official Certbot image and webroot,
 then install `nginx.conf` after `nginx -t` succeeds. Never change other virtual hosts.
-Run `bin/renew-tls.sh` twice daily from the NAS scheduler and monitor failures.
+The production certificate uses ZeroSSL ACME. Supply EAB credentials privately at
+initial account registration, never in Git or CI logs. Certbot's root-only account
+and renewal files retain the CA selection, so renewal needs no EAB key in the script.
+Run `install-renewal.sh` once to schedule `bin/renew-tls.sh` twice daily and monitor failures.
 DSM upgrades or reverse-proxy changes can regenerate nginx/cron configuration;
 verify this custom host and its renewal job after such operations.
 
