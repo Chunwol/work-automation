@@ -140,6 +140,58 @@ async function main() {
         await editRange(editor, 1, '1200', '1500');
         await click(`${editor} [data-add-range]`);
         await editRange(editor, 2, '1600', '1800');
+        const repeatLayouts = [];
+        for (const width of [1440, 1024, 768, 560, 430, 390, 320]) {
+            await page.setViewport({ width, height: 900 });
+            await page.$eval('#repeat-dialog', el => { el.scrollTop = 0; });
+            await page.waitForFunction(() => {
+                const rect = document.querySelector('#repeat-dialog').getBoundingClientRect();
+                return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight;
+            });
+            await page.focus(`${editor} .work-range:last-child .range-end`);
+            await page.waitForFunction(selector => {
+                const input = document.querySelector(selector);
+                const rect = input.getBoundingClientRect();
+                const list = document.querySelector('#repeat-list').getBoundingClientRect();
+                return rect.top >= list.top && rect.bottom <= list.bottom;
+            }, {}, `${editor} .work-range:last-child .range-end`);
+            const layout = await page.$$eval(`${editor} .work-range`, rows => rows.map(row => {
+                const start = row.querySelector('.range-start').getBoundingClientRect();
+                const end = row.querySelector('.range-end').getBoundingClientRect();
+                const remove = row.querySelector('[data-remove-range]').getBoundingClientRect();
+                const box = row.getBoundingClientRect();
+                return { width: box.width, height: box.height, start: start.toJSON(), end: end.toJSON(), remove: remove.toJSON() };
+            }));
+            repeatLayouts.push({ width, rows: layout });
+            for (const row of layout) {
+                assert.ok(Math.abs(row.start.width - row.end.width) < 1, `equal field widths at ${width}`);
+                assert.ok(Math.abs(row.start.y - row.end.y) < 1, `aligned input row at ${width}`);
+                assert.equal(row.start.height, 48);
+                assert.equal(row.end.height, 48);
+                assert.ok(row.start.width >= 80, `readable time field at ${width}`);
+                assert.ok(row.height <= (width > 560 ? 100 : 150), `compact interval at ${width}`);
+                assert.ok(row.start.right < row.end.left, `non-overlapping fields at ${width}`);
+                assert.ok(row.remove.width >= 44 && row.remove.height >= 44, `touch target at ${width}`);
+                if (width > 560) assert.equal(row.remove.bottom, row.end.bottom);
+            }
+            assert.equal(await page.$eval('#repeat-list', el => el.scrollWidth > el.clientWidth), false);
+            await page.keyboard.press('Tab');
+            assert.equal(await page.evaluate(() => document.activeElement.dataset.removeRange), '2');
+            await (await page.$('#repeat-dialog')).screenshot({ path: path.join(root, 'artifacts', `${process.env.REPEAT_CAPTURE_PREFIX || 'repeat-layout'}-${width}.png`) });
+            if ([1440, 390].includes(width)) await (await page.$(editor)).screenshot({ path: path.join(root, 'artifacts', `repeat-layout-section-${width}.png`) });
+        }
+        fs.writeFileSync(path.join(root, 'artifacts', `${process.env.REPEAT_CAPTURE_PREFIX || 'repeat-layout'}.json`), JSON.stringify(repeatLayouts, null, 2));
+        await page.setViewport({ width: 390, height: 360 });
+        await page.focus(`${editor} .work-range:last-child .range-end`);
+        await page.waitForFunction(selector => {
+            const input = document.querySelector(selector);
+            const rect = input.getBoundingClientRect();
+            return input === document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+                && rect.top >= document.querySelector('#repeat-list').getBoundingClientRect().top
+                && rect.bottom <= document.querySelector('#repeat-list').getBoundingClientRect().bottom;
+        }, {}, `${editor} .work-range:last-child .range-end`);
+        await (await page.$('#repeat-dialog')).screenshot({ path: path.join(root, 'artifacts/repeat-layout-keyboard.png') });
+        await page.setViewport({ width: 1440, height: 1100 });
         await click('#repeat-form button[type="submit"]');
         await confirm();
         await page.waitForSelector('#repeat-dialog:not([open])');
@@ -160,6 +212,7 @@ async function main() {
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ ok: true, splitShifts: true, midnightEnd: true, overlapBlocked: true,
             replaceTimeWithoutClearing: true, shortTimeInput: true, enterSubmitsShortTime: true,
+            repeatLayoutWidths: repeatLayouts.map(item => item.width), repeatKeyboardViewport: true,
             realMouseDragCopiesAllRanges: true, manualDeleteRestoresEmptyDate: true, recurringDeleteExcludesOnlyDate: true,
             savedAndReloaded: true, mobileWidths: [320, 390, 768, 1440], realPortalWrites: 0 }));
     } catch (error) {

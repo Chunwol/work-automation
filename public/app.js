@@ -77,11 +77,12 @@ function revealDialogInput() {
         const box = input.getBoundingClientRect();
         const header = dialog.querySelector('.modal-header')?.getBoundingClientRect();
         const footer = dialog.querySelector('.modal-actions')?.getBoundingClientRect();
-        const bounds = dialog.getBoundingClientRect();
+        const scrollArea = input.closest('#repeat-list') || dialog;
+        const bounds = scrollArea.getBoundingClientRect();
         const top = Math.max(bounds.top, header?.bottom || bounds.top) + 12;
         const bottom = Math.min(bounds.bottom, footer?.top || bounds.bottom) - 12;
-        if (box.bottom > bottom) dialog.scrollTop += box.bottom - bottom;
-        else if (box.top < top) dialog.scrollTop -= top - box.top;
+        if (box.bottom > bottom) scrollArea.scrollTop += box.bottom - bottom;
+        else if (box.top < top) scrollArea.scrollTop -= top - box.top;
     });
 }
 
@@ -667,9 +668,10 @@ function renderRangeEditor(editor, ranges) {
             const id = kind === 'day' && index === 0 ? `id="day-${side}"` : '';
             const pattern = side === 'end' ? '(([01]?[0-9]|2[0-3])(:?[0-5][0-9])?|24(:?00)?)' : '([01]?[0-9]|2[0-3])(:?[0-5][0-9])?';
             const value = timeToMinutes(range[side]) === null ? range[side] : displayTime(range[side]);
-            return `<label class="field repeat-time-field"><span>${name}</span><input ${id} class="range-${side} ${kind}-${side} time-input" type="text" inputmode="numeric" maxlength="5" pattern="${pattern}" value="${escapeHtml(value)}" placeholder="${side === 'start' ? '09:00' : '17:00'}" aria-label="${label} ${index + 1}구간 ${name}, 24시간제" required></label>`;
+            return `<label class="field repeat-time-field range-${side}-field"><span>${name}</span><input ${id} class="range-${side} ${kind}-${side} time-input" type="text" inputmode="numeric" maxlength="5" pattern="${pattern}" value="${escapeHtml(value)}" placeholder="${side === 'start' ? '09:00' : '17:00'}" aria-label="${label} ${index + 1}구간 ${name}, 24시간제" required></label>`;
         };
-        return `<div class="work-range"><div class="range-header"><span>근무 ${index + 1}</span><button type="button" class="range-remove" data-remove-range="${index}" aria-label="${label} ${index + 1}구간 삭제">삭제</button></div>${input('start', '출근')}<span class="range-arrow" aria-hidden="true">→</span>${input('end', '퇴근')}</div>`;
+        const remove = `<button type="button" class="range-remove" data-remove-range="${index}" aria-label="${label} ${index + 1}구간 삭제">삭제</button>`;
+        return `<div class="work-range"><div class="range-header"><span>근무 ${index + 1}</span>${kind === 'day' ? remove : ''}</div>${input('start', '출근')}<span class="range-arrow" aria-hidden="true">→</span>${input('end', '퇴근')}${kind === 'repeat' ? remove : ''}</div>`;
     }).join('');
     syncRangeEditor(editor);
 }
