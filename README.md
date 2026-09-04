@@ -91,8 +91,8 @@ npm run test:portal-dry-run
 
 ## 2. 실행 환경
 
-- Windows / macOS
-- Node.js 18 이상 권장
+- Windows / macOS 13 이상(Intel 또는 Apple Silicon)
+- Node.js 24 LTS 권장
 - npm
 - 크롬(또는 Chromium 실행 가능 환경)
 - 인터넷 연결(공휴일/학사일정 조회)
@@ -101,6 +101,14 @@ npm run test:portal-dry-run
 
 ```powershell
 npm install
+```
+
+Puppeteer가 현재 Mac 아키텍처에 맞는 Chrome for Testing을 설치합니다. 시스템에 별도로 Chrome을 설치할 필요는 없습니다.
+
+macOS에서는 설치 후 브라우저 실행 상태를 확인할 수 있습니다.
+
+```bash
+npm run check:macos
 ```
 
 ## 4. 기존 CLI 사용자 설정 파일 만들기
@@ -190,3 +198,9 @@ npm run start:cli
 
 - 인터넷 연결 상태 확인
 - 학교/Google 페이지 일시 장애 시 잠시 후 재실행
+
+### macOS에서 브라우저가 열리지 않음
+
+- `npm run check:macos`로 설치된 브라우저와 실행 권한 확인
+- 실패하면 `node_modules`를 삭제한 뒤 `npm install` 재실행
+- 회사 또는 학교 네트워크에서 Chrome 다운로드 주소가 차단되었는지 확인
