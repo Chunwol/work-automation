@@ -902,7 +902,31 @@ function jobSummary(job) {
     return '';
 }
 
+let jobClockTimer = null;
+
+function jobElapsed(job) {
+    const start = Date.parse(job.status === 'queued' ? job.createdAt : (job.startedAt || job.createdAt));
+    const end = job.finishedAt ? Date.parse(job.finishedAt) : Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return '';
+    const seconds = Math.max(0, Math.floor((end - start) / 1000));
+    const time = seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분 ${seconds % 60}초`;
+    return `${job.status === 'queued' ? '대기' : job.status === 'running' ? '경과' : '소요'} ${time}`;
+}
+
+function syncJobClock() {
+    clearInterval(jobClockTimer);
+    jobClockTimer = null;
+    if (!state.jobs.some(job => ['queued', 'running'].includes(job.status))) return;
+    jobClockTimer = setInterval(() => {
+        for (const element of $$('[data-job-clock]')) {
+            const job = state.jobs.find(item => item.id === element.dataset.jobClock);
+            if (job) element.textContent = jobElapsed(job);
+        }
+    }, 1000);
+}
+
 function renderJobs() {
+    syncJobClock();
     const list = $('#job-list');
     if (!state.jobs.length) {
         list.innerHTML = '<div class="empty-state"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 10h16m-11 5h6"/></svg></span><p>아직 실행한 작업이 없습니다.</p></div>';
@@ -915,11 +939,15 @@ function renderJobs() {
             ? `<div class="job-logs">${job.logs.map((log) => `<p class="${escapeHtml(log.level)}">${escapeHtml(log.message)}</p>`).join('')}</div>`
             : '';
         const summary = jobSummary(job);
+        const stage = job.status === 'queued' ? '앞선 작업이 끝나면 자동으로 시작합니다.'
+            : job.status === 'running' ? (job.logs?.at(-1)?.message || '작업을 처리하고 있습니다.') : '';
         return `
             <article class="job-item" data-job-id="${escapeHtml(job.id)}">
                 <div class="job-top"><strong>${escapeHtml(jobTitle(job))}</strong><span class="job-status ${escapeHtml(job.status)}">${escapeHtml(statusLabel(job.status))}</span></div>
                 <div class="job-meta"><span>${escapeHtml(new Date(job.createdAt).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span><span>${job.progress}%</span></div>
                 <progress class="job-progress" max="100" value="${Math.max(0, job.progress)}" aria-label="작업 진행률 ${job.progress}%"></progress>
+                <div class="job-timing"><span data-job-clock="${escapeHtml(job.id)}">${escapeHtml(jobElapsed(job))}</span></div>
+                ${stage ? `<p class="job-stage" role="status">${escapeHtml(stage)}</p>` : ''}
                 ${summary ? `<p class="job-summary">${escapeHtml(summary)}</p>` : ''}
                 ${job.errorMessage ? `<p class="form-error">${escapeHtml(job.errorMessage)}</p>` : ''}
                 ${logs}
@@ -944,7 +972,7 @@ function updateAutomationStatus(job) {
         return;
     }
     $('#automation-state').textContent = statusLabel(job.status);
-    $('#automation-note').textContent = job.status === 'running' ? `${job.progress}% 진행 중` : jobTitle(job);
+    $('#automation-note').textContent = job.status === 'running' ? (job.logs?.at(-1)?.message || `${job.progress}% 진행 중`) : jobTitle(job);
     const running = ['queued', 'running'].includes(job.status);
     live.classList.toggle('running', running);
     live.innerHTML = `<i></i>${running ? '작동 중' : statusLabel(job.status)}`;
@@ -1390,6 +1418,8 @@ function bindEvents() {
     $('#logout-button').addEventListener('click', async () => {
         try { await api('/api/logout', { method: 'POST' }); } catch {}
         state.eventSource?.close();
+        clearInterval(jobClockTimer);
+        jobClockTimer = null;
         state.user = null;
         state.csrfToken = null;
         state.portalCredential = { configured: false };

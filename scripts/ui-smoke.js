@@ -160,6 +160,31 @@ async function main() {
         assert.match(await page.$eval('#total-hours', (element) => element.textContent), /10시간/);
         assert.match(await page.$eval('#assignment-label', (element) => element.textContent), /일반근로장학금/);
 
+        await page.evaluate(() => {
+            state.jobs = [{ id: 'synthetic-progress', type: 'query', year: 2026, month: 6, status: 'running', progress: 45,
+                createdAt: new Date(Date.now() - 65000).toISOString(), startedAt: new Date(Date.now() - 65000).toISOString(),
+                logs: [{ level: 'info', message: '배정 1/2: 누적 근로시간·제한 확인' }] }];
+            renderJobs();
+        });
+        const elapsed = await page.$eval('[data-job-clock]', el => el.textContent);
+        assert.match(elapsed, /경과 1분/);
+        await page.waitForFunction(previous => document.querySelector('[data-job-clock]').textContent !== previous, {}, elapsed);
+        assert.match(await page.$eval('.job-stage', el => el.textContent), /누적 근로시간/);
+        for (const width of [320, 390, 1440]) {
+            await page.setViewport({ width, height: 900 });
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+            await (await page.$('.activity-panel')).screenshot({ path: path.join(artifactDir, `ui-job-progress-${width}.png`) });
+        }
+        await page.evaluate(() => {
+            state.jobs[0].status = 'succeeded';
+            state.jobs[0].finishedAt = new Date(Date.parse(state.jobs[0].startedAt) + 67000).toISOString();
+            state.jobs[0].progress = 100;
+            renderJobs();
+        });
+        assert.equal(await page.$eval('[data-job-clock]', el => el.textContent), '소요 1분 7초');
+        assert.equal(await page.evaluate(() => jobClockTimer), null);
+        assert.equal(await page.$('.job-stage'), null);
+
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({
             ok: true,

@@ -17,7 +17,7 @@ services:
       APP_MASTER_KEY_FILE: /run/secrets/master-key
       SETUP_TOKEN_FILE: /run/secrets/setup-token
       AUTOMATION_CONCURRENCY: "1"
-      PORTAL_REQUEST_INTERVAL_MS: "1500"
+      PORTAL_REQUEST_INTERVAL_MS: "500"
     volumes:
       - ./data:/data
       - ./secrets:/run/secrets:ro

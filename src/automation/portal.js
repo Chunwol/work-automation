@@ -46,8 +46,9 @@ function publicAssignment({ rawRecords, student, before, requestKey, ...assignme
     return assignment;
 }
 
-async function querySnapshot(client, year, month, selection) {
+async function querySnapshot(client, year, month, selection, onStep = () => {}) {
     validateMonth(year, month);
+    onStep('승인된 근로 배정을 조회합니다.', 0);
     const approved = requireArray(await client.command('FindWork', client.requestKey(year, month)), 'listStdno', 'FindWork');
     const groups = new Map();
     for (const row of approved) {
@@ -66,7 +67,9 @@ async function querySnapshot(client, year, month, selection) {
     const assignments = [];
     const allRecords = [];
     for (const group of groups.values()) {
+        const step = (message, part) => onStep(`배정 ${assignments.length + 1}/${groups.size}: ${message}`, (assignments.length * 3 + part) / (groups.size * 3));
         const requestKey = client.requestKey(year, month, group);
+        step('장학 유형·근무지 확인', 0);
         const catalog = await client.command('Chgdeptcd', requestKey);
         const scholarships = requireArray(catalog, 'listSchoCd', 'Chgdeptcd');
         const departments = requireArray(catalog, 'listWorkDeptCd', 'Chgdeptcd');
@@ -77,10 +80,12 @@ async function querySnapshot(client, year, month, selection) {
         if (!scholarship || !department) throw new Error('승인 배정이 포털 선택 목록에 없습니다.');
         requestKey.strnat = String(scholarship.NAT_AMT || '');
         if (!Number.isFinite(Number(requestKey.strnat))) throw new Error('장학 유형의 시간 제한 기준을 확인하지 못했습니다.');
+        step('누적 근로시간·제한 확인', 1);
         const before = (await client.command('Bef', requestKey)).dmMain;
         if (!before || !['Y', 'N'].includes(before.limit_yn)) throw new Error('Bef 근로시간 제한 응답을 확인하지 못했습니다.');
         portalMinutes(before.sumwork_smtcd);
         portalMinutes(before.sumwork2_smtcd);
+        step('등록된 근로일지 조회', 2);
         const listed = await client.command('List', requestKey);
         const rawRecords = requireArray(listed, 'listMain', 'List');
         const students = requireArray(listed, 'listStdt', 'List');
@@ -110,6 +115,7 @@ async function querySnapshot(client, year, month, selection) {
     if (selection && !selected) throw new Error('선택한 장학 유형과 근무지가 해당 연월의 승인 배정과 일치하지 않습니다.');
     const records = allRecords.filter((record) => !selection || assignmentKey(record) === assignmentKey(selection));
     records.sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
+    onStep('배정과 근로일지 조회를 마쳤습니다.', 1);
     return { assignments, selected, records, allRecords };
 }
 
@@ -127,15 +133,17 @@ async function dateRules(client, assignment, date) {
         vacation: vacation.strRemark === 'Y', holiday: holidays.some((row) => row.HOLIDAY === date), key };
 }
 
-async function preflight(client, snapshot, logs, { dryRun, now }) {
+async function preflight(client, snapshot, logs, { dryRun, now, onStep = () => {} }) {
     const { selected: assignment } = snapshot;
     if (client.identity.canUpdate !== 'Y') throw new Error('학교 포털에서 일지 저장 권한을 확인하지 못했습니다.');
     const pending = logs.filter((log) => !snapshot.records.some((record) => buildLogKey(record.date, record.start, record.end) === buildLogKey(log.date, log.start, log.end)));
     const rules = new Map();
+    const weeks = new Map();
     const sameAssignment = [...snapshot.records];
     const all = [...snapshot.allRecords];
     let added = 0;
-    for (const log of pending) {
+    for (const [index, log] of pending.entries()) {
+        onStep(`${log.date} ${log.start.slice(0, 2)}:${log.start.slice(2)} 근무 조건을 검증합니다.`, index / Math.max(1, pending.length));
         if (!assignment.periods.some((period) => log.date >= period.startDate && log.date <= period.endDate)) {
             throw new Error(`${log.date}: 승인된 근로 기간 밖입니다.`);
         }
@@ -149,14 +157,22 @@ async function preflight(client, snapshot, logs, { dryRun, now }) {
         const daily = all.filter((record) => record.date === log.date);
         if (daily.some((record) => log.start < record.end && record.start < log.end)) throw new Error(`${log.date}: 다른 배정을 포함하여 기존 근무시간과 겹칩니다.`);
         if (daily.reduce((sum, record) => sum + duration(record), minutes) > 480) throw new Error(`${log.date}: 하루 근로시간 8시간을 초과합니다.`);
-        const rule = await dateRules(client, assignment, log.date);
+        const rule = rules.get(log.date) || await dateRules(client, assignment, log.date);
         rules.set(log.date, rule);
+        weeks.set(log.date, rule.week);
         if (rule.holiday && HOLIDAY_RESTRICTED.has(assignment.scholarshipCode)) throw new Error(`${log.date}: 포털 공휴일에는 해당 장학 유형을 입력할 수 없습니다.`);
         if (Number(assignment.requestKey.strnat) !== 0) {
             let weekMinutes = String(assignment.before.befcnt) === rule.week ? portalMinutes(assignment.before.bef) : 0;
             for (const record of sameAssignment) {
-                if (!rules.has(record.date)) rules.set(record.date, await dateRules(client, assignment, record.date));
-                if (rules.get(record.date).week === rule.week) weekMinutes += duration(record);
+                if (!weeks.has(record.date)) {
+                    // Existing records only need their week number, not holiday/vacation checks.
+                    const week = (await client.command('Checkweek', { ...assignment.requestKey, strCheckDate: record.date, strworkdt: record.date, strDt: record.date })).dmMain;
+                    if (!/^\d+$/.test(String(week?.week_cnt || '')) || !/^[1-7]$/.test(String(week?.CheckDate || ''))) {
+                        throw new Error('포털 주차 응답을 확인하지 못했습니다.');
+                    }
+                    weeks.set(record.date, String(week.week_cnt));
+                }
+                if (weeks.get(record.date) === rule.week) weekMinutes += duration(record);
             }
             if (!['1', '2'].includes(String(assignment.student.DAN_CD))) throw new Error('주간/야간 학생 구분을 확인하지 못했습니다.');
             const dayTerm = !rule.vacation && String(assignment.student.DAN_CD) === '1';
@@ -172,6 +188,11 @@ async function preflight(client, snapshot, logs, { dryRun, now }) {
         sameAssignment.push(log);
     }
     return { pending, rules, skippedCount: logs.length - pending.length };
+}
+
+function reportSteps(options, start, end) {
+    return (message, fraction) => options.onEvent?.({ level: 'info', message,
+        progress: Math.round(start + (end - start) * Math.max(0, Math.min(1, fraction))) });
 }
 
 function buildInsertRow(client, assignment, log, rule) {
@@ -194,8 +215,9 @@ function buildInsertRow(client, assignment, log, rule) {
 async function withSession(options, operation) {
     const client = options.clientFactory ? options.clientFactory() : new PortalHttpClient();
     try {
-        options.onEvent?.({ level: 'info', message: 'HTTP로 학교 포털 로그인과 SSO 인증을 진행합니다.', progress: 10 });
-        await client.login(options.portalId, options.portalPassword);
+        options.onEvent?.({ level: 'info', message: 'HTTP로 학교 포털 로그인과 SSO 인증을 진행합니다.', progress: 1 });
+        await client.login(options.portalId, options.portalPassword, (message, progress) => options.onEvent?.({ level: 'info', message, progress }));
+        options.onEvent?.({ level: 'info', message: '포털 인증을 마쳤습니다.', progress: 20 });
         return await operation(client);
     } finally {
         await client.close();
@@ -205,7 +227,7 @@ async function withSession(options, operation) {
 async function queryPortalRecords(options) {
     validateMonth(options.year, options.month);
     return withSession(options, async (client) => {
-        const snapshot = await querySnapshot(client, options.year, options.month);
+        const snapshot = await querySnapshot(client, options.year, options.month, null, reportSteps(options, 20, 95));
         options.onEvent?.({ level: 'success', message: `승인 배정 ${snapshot.assignments.length}건과 기록 ${snapshot.records.length}건을 조회했습니다.`, progress: 100 });
         return { assignments: snapshot.assignments.map(publicAssignment), records: snapshot.records, count: snapshot.records.length,
             year: options.year, month: options.month, transport: 'http' };
@@ -235,31 +257,40 @@ async function runPortalAutomation(options) {
         activePortalAccounts.add(lock);
         let insertedCount = 0;
         try {
-            let snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment);
-            const checked = await preflight(client, snapshot, preview.logs, { dryRun: Boolean(options.dryRun), now: options.now || new Date() });
+            let snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, reportSteps(options, 20, 27));
+            const checked = await preflight(client, snapshot, preview.logs, { dryRun: Boolean(options.dryRun), now: options.now || new Date(), onStep: reportSteps(options, 27, 34) });
             emit('info', `동일 일정 ${checked.skippedCount}건 제외, 신규 ${checked.pending.length}건 검증 완료`, 35);
             if (options.dryRun) return { mode: 'dry-run', transport: 'http', portalWrites: 0, plannedCount: preview.entryCount,
                 pendingCount: checked.pending.length, skippedCount: checked.skippedCount, totalMinutes: preview.totalMinutes, existingRecords: snapshot.records };
             let skippedCount = checked.skippedCount;
-            for (const log of checked.pending) {
-                snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment);
+            if (checked.pending.length) snapshot = null;
+            for (const [index, log] of checked.pending.entries()) {
+                const start = 35 + index / checked.pending.length * 60;
+                const end = 35 + (index + 1) / checked.pending.length * 60;
+                const report = reportSteps(options, start, end);
+                // The preceding save's verified snapshot is already the next fresh pre-write read.
+                // The first write (and an externally inserted duplicate) still forces a full refresh.
+                if (!snapshot) snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, (message, part) => report(message, part * .2));
+                report(`${index + 1}/${checked.pending.length} · ${log.date} 저장 전 검증`, .2);
                 const current = await preflight(client, snapshot, [log], { dryRun: false, now: options.now || new Date() });
-                if (!current.pending.length) { skippedCount += 1; continue; }
+                if (!current.pending.length) { skippedCount += 1; snapshot = null; continue; }
                 const rule = current.rules.get(log.date);
+                report(`${index + 1}/${checked.pending.length} · ${log.date} 포털에 저장 중`, .4);
                 let saveFailed = false;
                 try { await client.save(rule.key, buildInsertRow(client, snapshot.selected, log, rule)); }
                 catch { saveFailed = true; }
                 // A timeout can mean a committed write. Never retry Save without reading the result.
                 let verified;
-                try { verified = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment); }
+                try { verified = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, (message, part) => report(`저장 결과 확인 · ${message}`, .5 + part * .45)); }
                 catch { throw new Error(`${log.date}: 저장 요청 후 재조회에 실패했습니다. 결과가 불확실하므로 자동 재전송하지 않았습니다.`); }
                 const matches = verified.records.filter((record) => buildLogKey(record.date, record.start, record.end) === buildLogKey(log.date, log.start, log.end)
                     && record.content.trim() === log.content.trim());
                 if (matches.length !== 1) throw new Error(`${log.date}: 저장${saveFailed ? ' 응답 오류 및' : ' 후'} 검증에서 정확한 일지 1건을 확인하지 못했습니다. 재조회 후 확인해주세요.`);
                 insertedCount += 1;
                 snapshot = verified;
-                emit('success', `${log.date} API 저장 및 재조회 검증 완료`, 35 + Math.round(insertedCount / Math.max(1, checked.pending.length) * 60));
+                emit('success', `${log.date} API 저장 및 재조회 검증 완료`, Math.round(end));
             }
+            if (!snapshot) snapshot = await querySnapshot(client, schedule.year, schedule.month, schedule.portalAssignment, reportSteps(options, 95, 99));
             emit('success', `신규 ${insertedCount}건 저장, 기존 ${skippedCount}건 유지`, 100);
             return { mode: 'submit', transport: 'http', plannedCount: preview.entryCount, insertedCount, skippedCount,
                 verifiedCount: snapshot.records.length, totalMinutes: preview.totalMinutes,

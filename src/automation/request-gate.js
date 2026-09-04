@@ -1,5 +1,5 @@
 class PortalRequestGate {
-    constructor({ intervalMs = 1500, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+    constructor({ intervalMs = 500, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
         this.intervalMs = intervalMs;
         this.now = now;
         this.sleep = sleep;

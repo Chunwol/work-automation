@@ -474,6 +474,8 @@ body:has(dialog[open]) { overflow: hidden; }
 .check-field { display: flex; align-items: center; gap: 9px; cursor: pointer; color: var(--ink-soft); font-size: .8rem; font-weight: 750; }
 .check-field input { width: 18px; height: 18px; accent-color: var(--blue); }
 .confirm-warning { display: flex; gap: 11px; padding: 14px; border-radius: 13px; }
+.job-timing { margin-top: 6px; color: var(--ink-soft); font-size: .68rem; font-variant-numeric: tabular-nums; }
+.job-stage { margin: 8px 0 0; color: var(--ink-soft); font-size: .74rem; overflow-wrap: anywhere; }
 .repeat-list { display: grid; gap: 0; }
 .repeat-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 12px 10px; }
 .repeat-row + .repeat-row::before { content: ""; position: absolute; top: 0; right: 10px; left: 10px; height: 1px; background: var(--line); }

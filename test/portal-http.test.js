@@ -291,3 +291,74 @@ test('portal mutation rejects confirmed/stale records and verifies ambiguous del
     assert.equal((await mutatePortalRecord(input)).verified, true);
     assert.equal(client.changes.length, 2);
 });
+
+test('split shifts reuse the verified snapshot and deduplicate date rules within each validation pass', async () => {
+    const client = new FakePortal();
+    const events = [];
+    const opts = options(client, { onEvent: event => events.push(event) });
+    opts.schedule.specialDates[1] = [{ start: '0900', end: '1100' }, { start: '1200', end: '1400' }, { start: '1500', end: '1700' }];
+    assert.equal((await runPortalAutomation(opts)).insertedCount, 3);
+    assert.equal(client.calls.filter(name => name === 'FindWork').length, 5);
+    for (const command of ['Checkweek', 'Vacation', 'Holi']) {
+        assert.equal(client.calls.filter(name => name === command).length, 4);
+    }
+    assert.equal(client.calls.length + client.saves.length, 35);
+    const progress = events.map(event => event.progress).filter(Number.isFinite);
+    assert.deepEqual(progress, [...progress].sort((a, b) => a - b));
+    assert.equal(progress.at(-1), 100);
+    assert.ok(events.some(event => event.message.includes('3/3')));
+});
+
+test('live assignment, duplicate and semester-limit changes still stop later writes', async () => {
+    for (const change of ['assignment', 'overlap', 'semester', 'holiday']) {
+        const client = new FakePortal();
+        const save = client.save.bind(client);
+        client.save = async (key, row) => {
+            await save(key, row);
+            if (change === 'assignment') client.approved[0].END_DT = '20260901';
+            if (change === 'overlap') client.records.push({ ...row, WORK_DT: '20260902', ST_HHMI: '1200', END_HHMI: '1500' });
+            if (change === 'semester') client.before.sumwork_smtcd = '64000';
+            if (change === 'holiday') client.holidays = ['20260902'];
+        };
+        const opts = options(client);
+        opts.schedule.specialDates[2] = { start: '1300', end: '1700' };
+        await assert.rejects(runPortalAutomation(opts), /1건은 저장.*나머지는 중단/);
+        assert.equal(client.saves.length, 1, change);
+    }
+});
+
+test('preflight refreshes live data after the initial full validation and skips external duplicates safely', async () => {
+    const client = new FakePortal();
+    const opts = options(client, { onEvent: event => {
+        if (event.progress === 35 && event.message.includes('검증 완료')) {
+            client.records.push({ STUDENT_NO: 'test-student', SCHO_CD: '50086', WORK_DEPT_CD: '21095',
+                WORK_DT: '20260901', SEQ: '1', ST_HHMI: '1300', END_HHMI: '1700', REMARK: 'Already saved' });
+        }
+    } });
+    const result = await runPortalAutomation(opts);
+    assert.equal(result.insertedCount, 0);
+    assert.equal(result.skippedCount, 1);
+    assert.equal(result.records.length, 1);
+    assert.equal(client.saves.length, 0);
+});
+
+test('existing records need only week lookup, while new dates still verify vacation and holidays', async () => {
+    const client = new FakePortal();
+    client.catalog.listSchoCd[0].NAT_AMT = '1';
+    client.records.push({ STUDENT_NO: 'test-student', SCHO_CD: '50086', WORK_DEPT_CD: '21095',
+        WORK_DT: '20260902', SEQ: '1', ST_HHMI: '1300', END_HHMI: '1400' });
+    await runPortalAutomation(options(client, { dryRun: true }));
+    assert.equal(client.calls.filter(name => name === 'Checkweek').length, 2);
+    assert.equal(client.calls.filter(name => name === 'Vacation').length, 1);
+    assert.equal(client.calls.filter(name => name === 'Holi').length, 1);
+});
+
+test('query reports real intermediate stages and performs no writes', async () => {
+    const client = new FakePortal();
+    const events = [];
+    await queryPortalRecords({ ...options(client), year: 2026, month: 9, onEvent: event => events.push(event) });
+    assert.ok(events.some(event => event.progress > 20 && event.progress < 95));
+    assert.ok(events.some(event => event.message.includes('누적 근로시간')));
+    assert.equal(events.at(-1).progress, 100);
+    assert.equal(client.saves.length, 0);
+});

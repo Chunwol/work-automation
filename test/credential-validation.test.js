@@ -94,6 +94,7 @@ test('portal identity rate limit spans different app accounts', async t => {
 
 test('real HTTP verification uses login and read-only initialization, then clears session cookies', async () => {
     const commands = [];
+    const events = [];
     const client = new PortalHttpClient({ fetchImpl: async (url, init) => {
         const pathname = new URL(url).pathname;
         if (pathname === '/login_real.jsp') return new Response('<form id="loginFrm"><input name="user_id"><input name="user_password"></form>');
@@ -105,10 +106,12 @@ test('real HTTP verification uses login and read-only initialization, then clear
         assert.equal(command, 'OnLoad');
         return Response.json({ listSchoCd: [], listWorkDeptCd: [], systemInfo: [{ PGAUTH_UPD_POSB_YN: 'N' }] });
     } });
-    assert.equal(await verifyPortalCredentials({ portalId: 'test', portalPassword: 'test-password', clientFactory: () => client }), true);
+    assert.equal(await verifyPortalCredentials({ portalId: 'test', portalPassword: 'test-password', clientFactory: () => client, onEvent: event => events.push(event) }), true);
     assert.deepEqual(commands, ['MenuAuth', 'Onload', 'OnLoad']);
     assert.equal(await client.jar.getCookieString('https://portal.dongyang.ac.kr/'), '');
     assert.equal(client.identity, null);
+    assert.deepEqual(events.map(event => event.progress), [1, 2, 5, 12, 15, 18, 20]);
+    assert.equal(JSON.stringify(events).includes('test-password'), false);
 });
 
 test('login timeout fails closed and clears the temporary session', async () => {

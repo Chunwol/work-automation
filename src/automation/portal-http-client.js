@@ -168,16 +168,17 @@ class PortalHttpClient {
         }, 'Save');
     }
 
-    async login(portalId, portalPassword) {
+    async login(portalId, portalPassword, onStage = () => {}) {
         this.loginSignal = AbortSignal.timeout(this.loginTimeoutMs);
         try {
-            return await this.#authenticate(portalId, portalPassword);
+            return await this.#authenticate(portalId, portalPassword, onStage);
         } finally {
             this.loginSignal = null;
         }
     }
 
-    async #authenticate(portalId, portalPassword) {
+    async #authenticate(portalId, portalPassword, onStage) {
+        onStage('학교 포털 로그인 화면을 확인합니다.', 2);
         const initial = await this.request(LOGIN_URL);
         const $ = cheerio.load(initial.text);
         const form = $('#loginFrm');
@@ -189,19 +190,23 @@ class PortalHttpClient {
         }
         fields.set('user_id', portalId);
         fields.set('user_password', portalPassword);
+        onStage('학교 포털 로그인과 SSO 인증을 진행합니다.', 5);
         await this.navigate('https://portal.dongyang.ac.kr/proc/Login.do?targetId=DMIS&RelayState=/', {
             method: 'POST', body: fields.toString(), contentType: 'application/x-www-form-urlencoded', referer: initial.url
         });
+        onStage('SSO 인증 완료, 근로 메뉴 접근 권한을 확인합니다.', 12);
         const menu = await this.json('/sys.Main.do', {
             param: { MENU_ID: ['SubWorkSchoE_SCH'], OPRT_ROLE_ID: [''], strCommand: ['MenuAuth'] }
         }, 'MenuAuth');
         this.parentKey = String(menu.dmMain?.strParentKeyValue9 || '');
+        onStage('본인 학생 정보를 확인합니다.', 15);
         const header = await this.json('/cmn.CmnAppHeader.do', {
             param: { strCommand: ['Onload'] }, data: { dmOprtRole: { strMenuId: 'SubWorkSchoE_SCH' } }
         }, 'Header');
         const identity = requireArray(header, 'systemInfo', 'Header')[0];
         if (!identity?.PGUSER_MEMBER_NO || !identity?.PGUSER_NM) throw new Error('포털 로그인 계정 정보를 확인하지 못했습니다.');
         this.identity = { studentNo: String(identity.PGUSER_MEMBER_NO), name: String(identity.PGUSER_NM) };
+        onStage('장학 유형과 근무지 선택 목록을 불러옵니다.', 18);
         this.catalog = await this.command('OnLoad');
         requireArray(this.catalog, 'listSchoCd', 'OnLoad');
         requireArray(this.catalog, 'listWorkDeptCd', 'OnLoad');

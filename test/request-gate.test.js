@@ -59,5 +59,20 @@ test('a network error does not poison the queue or trigger a retry', async () =>
     const result = await gate.run(async () => new Response('', { status: 200 }));
     assert.equal(calls, 1);
     assert.equal(result.status, 200);
-    assert.equal(timer.now(), 101500);
+    assert.equal(timer.now(), 100500);
+});
+
+test('default gate starts requests 500ms apart without concurrent requests', async () => {
+    const timer = clock();
+    const gate = new PortalRequestGate(timer);
+    const starts = [];
+    let active = 0;
+    await Promise.all(Array.from({ length: 5 }, () => gate.run(async () => {
+        assert.equal(active++, 0);
+        starts.push(timer.now());
+        await Promise.resolve();
+        active--;
+        return new Response('');
+    })));
+    assert.deepEqual(starts, [100000, 100500, 101000, 101500, 102000]);
 });
