@@ -77,7 +77,7 @@ function revealDialogInput() {
         const box = input.getBoundingClientRect();
         const header = dialog.querySelector('.modal-header')?.getBoundingClientRect();
         const footer = dialog.querySelector('.modal-actions')?.getBoundingClientRect();
-        const scrollArea = input.closest('#repeat-list') || dialog;
+        const scrollArea = input.closest('#repeat-list, #day-dialog-body') || dialog;
         const bounds = scrollArea.getBoundingClientRect();
         const top = Math.max(bounds.top, header?.bottom || bounds.top) + 12;
         const bottom = Math.min(bounds.bottom, footer?.top || bounds.bottom) - 12;
@@ -664,9 +664,26 @@ function syncRangeEditor(editor) {
     $$('.time-input', editor).forEach(input => { input.disabled = !enabled; });
     $$('[data-remove-range]', editor).forEach(button => {
         button.disabled = !enabled || rows.length === 1;
-        button.hidden = editor.dataset.rangeEditor === 'repeat' && rows.length === 1;
+        button.hidden = rows.length === 1;
     });
     $('[data-add-range]', editor).disabled = !enabled || rows.length >= 8;
+    if (editor.dataset.rangeEditor === 'day') updateDayDuration();
+}
+
+function updateDayDuration() {
+    const summary = $('#day-duration');
+    if ($('#day-excluded').checked) {
+        summary.textContent = '근무 제외';
+        return;
+    }
+    try {
+        const ranges = validateRanges(readRangeEditor($('#day-range-editor')));
+        const total = ranges.reduce((sum, range) => sum + timeToMinutes(range.end) - timeToMinutes(range.start), 0);
+        const { hours, minutes } = formatDuration(total);
+        summary.textContent = `${ranges.length}구간 · 총 ${hours ? `${hours}시간` : ''}${hours && minutes ? ' ' : ''}${minutes ? `${minutes}분` : ''}`;
+    } catch {
+        summary.textContent = '시간 확인 필요';
+    }
 }
 
 function renderRangeEditor(editor, ranges) {
@@ -680,7 +697,7 @@ function renderRangeEditor(editor, ranges) {
             return `<label class="field repeat-time-field range-${side}-field"><span>${name}</span><input ${id} class="range-${side} ${kind}-${side} time-input" type="text" inputmode="numeric" maxlength="5" pattern="${pattern}" value="${escapeHtml(value)}" placeholder="${side === 'start' ? '09:00' : '17:00'}" aria-label="${label} ${index + 1}구간 ${name}, 24시간제" required></label>`;
         };
         const remove = `<button type="button" class="range-remove" data-remove-range="${index}" aria-label="${label} ${index + 1}구간 삭제">삭제</button>`;
-        return `<div class="work-range"><div class="range-header"><span>근무 ${index + 1}</span>${kind === 'day' ? remove : ''}</div>${input('start', '출근')}<span class="range-arrow" aria-hidden="true">→</span>${input('end', '퇴근')}${kind === 'repeat' ? remove : ''}</div>`;
+        return `<div class="work-range"><div class="range-header"><span>근무 ${index + 1}</span></div>${input('start', '출근')}<span class="range-arrow" aria-hidden="true">→</span>${input('end', '퇴근')}${remove}</div>`;
     }).join('');
     syncRangeEditor(editor);
 }
@@ -1254,6 +1271,11 @@ function bindEvents() {
         selectTimeOnClick = null;
         const digits = compactTime(event.target.value);
         if (timeToMinutes(digits) !== null) event.target.value = displayTime(digits);
+        if (event.target.closest('#day-range-editor')) updateDayDuration();
+    });
+    $('#day-range-editor').addEventListener('input', () => {
+        showError($('#day-error'), '');
+        updateDayDuration();
     });
     document.addEventListener('click', event => {
         const button = event.target.closest('[data-add-range], [data-remove-range]');
@@ -1275,6 +1297,27 @@ function bindEvents() {
         resolve?.($('#action-confirm-dialog').returnValue === 'confirm');
     });
     $$('dialog').forEach(dialog => {
+        let backdropPress = null;
+        const isOutside = event => {
+            const box = dialog.getBoundingClientRect();
+            return event.target === dialog && (event.clientX < box.left || event.clientX > box.right
+                || event.clientY < box.top || event.clientY > box.bottom);
+        };
+        dialog.addEventListener('pointerdown', event => {
+            backdropPress = event.isPrimary && event.button === 0 && isOutside(event)
+                ? { x: event.clientX, y: event.clientY } : null;
+        });
+        dialog.addEventListener('pointercancel', () => { backdropPress = null; });
+        dialog.addEventListener('close', () => { backdropPress = null; });
+        dialog.addEventListener('click', event => {
+            const press = backdropPress;
+            backdropPress = null;
+            if (!press || !isOutside(event) || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8) return;
+            event.preventDefault();
+            event.stopPropagation();
+            // Use the Escape/cancel guards, including in-flight portal operations.
+            if (dialog.dispatchEvent(new Event('cancel', { cancelable: true }))) dialog.close('cancel');
+        });
         const title = $('h2', dialog);
         if (!title) return;
         title.id ||= `${dialog.id}-title`;

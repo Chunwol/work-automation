@@ -301,24 +301,26 @@
         </div>
     </dialog>
 
-    <dialog id="day-dialog" class="modal small-modal">
+    <dialog id="day-dialog" class="modal day-modal">
         <form id="day-form" method="dialog">
             <div class="modal-header">
                 <div><p class="panel-kicker">WORK DAY</p><h2 id="day-dialog-title">6월 1일 월요일</h2></div>
                 <button class="modal-close" value="cancel" aria-label="닫기">×</button>
             </div>
-            <div id="day-portal-records" class="day-portal-records" hidden></div>
-            <label id="day-holiday-field" class="check-field holiday-work-field" hidden><input id="day-holiday-work" type="checkbox"><span id="day-holiday-label">공휴일 근무 · 자동 제외 해제</span></label>
-            <div id="day-range-editor" data-range-editor="day">
-                <div class="range-toolbar"><h3 class="day-section-title">예정 일정</h3><button class="button button-quiet range-add" type="button" data-add-range>구간 추가</button></div>
-                <div id="day-ranges" class="range-list" data-range-list></div>
+            <div id="day-dialog-body">
+                <div id="day-portal-records" class="day-portal-records" hidden></div>
+                <label id="day-holiday-field" class="check-field holiday-work-field switch-field" hidden><input id="day-holiday-work" type="checkbox" role="switch"><span id="day-holiday-label">공휴일 근무 · 자동 제외 해제</span></label>
+                <div id="day-range-editor" data-range-editor="day">
+                    <div class="range-toolbar"><div><h3 class="day-section-title">예정 일정</h3><p id="day-duration" class="day-duration" role="status"></p></div><button class="button button-quiet range-add" type="button" data-add-range>구간 추가</button></div>
+                    <div id="day-ranges" class="range-list" data-range-list></div>
+                </div>
+                <label class="check-field switch-field day-excluded-field"><input id="day-excluded" type="checkbox" role="switch" aria-controls="day-range-editor"><span>이 날짜를 근무에서 제외</span></label>
+                <div id="day-copy-fields" class="day-copy-fields" hidden>
+                    <label class="field"><span>복사할 날짜</span><select id="day-copy-target"></select></label>
+                    <button id="copy-day-button" class="button button-quiet" type="button">일정 복사</button>
+                </div>
             </div>
-            <label class="check-field"><input id="day-excluded" type="checkbox"><span>이 날짜를 근무에서 제외</span></label>
-            <div id="day-copy-fields" class="day-copy-fields" hidden>
-                <label class="field"><span>복사할 날짜</span><select id="day-copy-target"></select></label>
-                <button id="copy-day-button" class="button button-quiet" type="button">일정 복사</button>
-            </div>
-            <p id="day-error" class="form-error" hidden></p>
+            <p id="day-error" class="form-error" role="alert" hidden></p>
             <div class="modal-actions split-actions">
                 <button id="remove-day-button" class="button button-danger-quiet" type="button">예정 일정만 삭제</button>
                 <span></span>

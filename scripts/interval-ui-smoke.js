@@ -31,6 +31,10 @@ async function main() {
         await page.$$eval(`${editor} .work-range`, (rows, index, start, end) => {
             rows[index].querySelector('.range-start').value = start;
             rows[index].querySelector('.range-end').value = end;
+            for (const input of rows[index].querySelectorAll('input')) {
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+            }
         }, index, start, end);
     };
     const applyDay = async () => {
@@ -59,6 +63,10 @@ async function main() {
         await page.waitForSelector('[data-day="1"]');
         phase = 'three intervals and 24-hour inputs';
         await click('[data-day="1"]');
+        assert.equal(await page.$eval('#day-range-editor [data-remove-range]', el => el.hidden), true);
+        assert.equal(await page.$eval('#day-duration', el => el.textContent), '1구간 · 총 8시간');
+        await page.$eval('#day-dialog', async el => { await Promise.all(el.getAnimations().map(animation => animation.finished)); });
+        await (await page.$('#day-dialog')).screenshot({ path: path.join(root, 'artifacts/intervals-day-single.png') });
         await click('#day-start');
         assert.deepEqual(await page.$eval('#day-start', el => [el.selectionStart, el.selectionEnd]), [0, 5]);
         await page.keyboard.type('930');
@@ -82,12 +90,49 @@ async function main() {
         await page.waitForSelector('#day-error:not([hidden])');
         assert.match(await page.$eval('#day-error', el => el.textContent), /겹칩니다/);
         await editRange('#day-range-editor', 2, '2200', '2400');
+        assert.equal(await page.$eval('#day-error', el => el.hidden), true);
+        assert.equal(await page.$eval('#day-duration', el => el.textContent), '3구간 · 총 8시간');
+        await click('#day-excluded');
+        assert.equal(await page.$eval('#day-duration', el => el.textContent), '근무 제외');
+        assert.equal(await page.$$eval('#day-range-editor input', inputs => inputs.every(input => input.disabled)), true);
+        await click('#day-excluded');
+        assert.equal(await page.$eval('#day-duration', el => el.textContent), '3구간 · 총 8시간');
         assert.equal(await page.$$eval('#day-range-editor input', inputs => inputs.every(input => input.type === 'text' && input.inputMode === 'numeric')), true);
-        for (const width of [320, 390, 768, 1440]) {
+        const dayWidths = [320, 390, 560, 600, 768, 1440];
+        for (const width of dayWidths) {
             await page.setViewport({ width, height: 900 });
             assert.equal(await page.$eval('#day-dialog', el => el.scrollWidth > el.clientWidth), false);
-            if (width === 390) await page.screenshot({ path: path.join(root, 'artifacts/intervals-mobile.png') });
+            const rows = await page.$$eval('#day-ranges .work-range', rows => rows.map(row => {
+                const rect = selector => row.querySelector(selector).getBoundingClientRect().toJSON();
+                return { start: rect('.range-start'), end: rect('.range-end'), remove: rect('.range-remove'),
+                    border: getComputedStyle(row).borderWidth, height: row.getBoundingClientRect().height };
+            }));
+            for (const row of rows) {
+                assert.ok(Math.abs(row.start.width - row.end.width) < 1, `day equal widths at ${width}`);
+                assert.ok(Math.abs(row.start.top - row.end.top) < 1, `day aligned times at ${width}`);
+                assert.ok(row.start.width >= 80, `day readable input at ${width}`);
+                assert.equal(row.start.height, 48);
+                assert.equal(row.end.height, 48);
+                assert.equal(row.border, '0px');
+                assert.ok(row.remove.width >= 44 && row.remove.height >= 44);
+                assert.ok(row.height <= (width > 560 ? 100 : 150));
+            }
+            await page.$eval('#day-dialog-body', el => { el.scrollTop = 0; });
+            await (await page.$('#day-dialog')).screenshot({ path: path.join(root, 'artifacts', `intervals-day-${width}.png`) });
         }
+        await page.setViewport({ width: 390, height: 360 });
+        await page.focus('#day-ranges .work-range:last-child .range-end');
+        await page.waitForFunction(() => {
+            const input = document.activeElement;
+            const rect = input.getBoundingClientRect();
+            const body = document.querySelector('#day-dialog-body').getBoundingClientRect();
+            return rect.top >= body.top && rect.bottom <= body.bottom
+                && input === document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        });
+        await page.keyboard.press('Tab');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.removeRange), '2');
+        await (await page.$('#day-dialog')).screenshot({ path: path.join(root, 'artifacts/intervals-day-keyboard.png') });
+        await page.setViewport({ width: 1440, height: 1100 });
         await applyDay();
         assert.equal(await page.$$eval('[data-day="1"] .day-time', rows => rows.length), 3);
         assert.match(await page.$eval('#total-hours', el => el.textContent), /^8/);
@@ -255,6 +300,7 @@ async function main() {
         console.log(JSON.stringify({ ok: true, splitShifts: true, midnightEnd: true, overlapBlocked: true,
             replaceTimeWithoutClearing: true, shortTimeInput: true, enterSubmitsShortTime: true,
             repeatLayoutWidths: repeatLayouts.map(item => item.width), repeatInsetDividers: true, repeatKeyboardViewport: true,
+            dayLayoutWidths: dayWidths, dayDurationSummary: true, dayKeyboardViewport: true,
             realMouseDragCopiesAllRanges: true, manualDeleteRestoresEmptyDate: true, recurringDeleteExcludesOnlyDate: true,
             savedAndReloaded: true, mobileWidths: [320, 390, 768, 1440], realPortalWrites: 0 }));
     } catch (error) {

@@ -136,6 +136,14 @@ async function main() {
                 await click(`#${id} .modal-close`);
                 await page.waitForSelector(`#${id}:not([open])`);
                 await closeAll();
+                // Reuse the synthetic query result for the second visual check, without another job request.
+                if (id === 'assignment-dialog') await page.evaluate(() => renderAssignmentDialog(state.portalAssignments));
+                else await open();
+                await inspect(id);
+                await page.touchscreen.tap(4, 4);
+                await page.waitForSelector(`#${id}:not([open])`);
+                if (id === 'action-confirm-dialog') await waitForConfirmationClosed();
+                await closeAll();
                 results.push({ width, height, name, passed: true });
             }
         }
@@ -155,6 +163,47 @@ async function main() {
         await page.screenshot({ path: path.join(artifacts, 'modal-short-viewport.png') });
         await closeAll();
         await page.setViewport({ width: 390, height: 844, hasTouch: true });
+        phase = 'backdrop cancels drafts and never confirms a deletion';
+        const unchanged = await page.evaluate(() => JSON.stringify(state.schedule));
+        await click('[data-day="1"]');
+        await page.focus('#day-start');
+        await page.keyboard.type('13');
+        await page.mouse.click(4, 4);
+        await page.waitForSelector('#day-dialog:not([open])');
+        assert.equal(await page.evaluate(() => JSON.stringify(state.schedule)), unchanged);
+        await click('[data-day="1"]');
+        const dayBox = await (await page.$('#day-dialog')).boundingBox();
+        await page.mouse.click(dayBox.x + 3, dayBox.y + dayBox.height / 2);
+        assert.equal(await page.$eval('#day-dialog', el => el.open), true, 'inner padding is not backdrop');
+        await page.mouse.move(dayBox.x + 8, dayBox.y + 8);
+        await page.mouse.down();
+        await page.mouse.move(4, 4, { steps: 8 });
+        await page.mouse.up();
+        assert.equal(await page.$eval('#day-dialog', el => el.open), true, 'dragging out does not dismiss');
+        await click('#remove-day-button');
+        await page.waitForSelector('#action-confirm-dialog[open]');
+        await page.touchscreen.tap(4, 4);
+        await waitForConfirmationClosed();
+        assert.equal(await page.$eval('#day-dialog', el => el.open), true, 'only top modal closes');
+        assert.equal(await page.evaluate(() => JSON.stringify(state.schedule)), unchanged);
+        await closeAll();
+        phase = 'backdrop respects in-flight portal guards';
+        await click('#portal-settings-button');
+        await page.evaluate(() => { state.portalCredentialSaving = true; });
+        await page.touchscreen.tap(4, 4);
+        assert.equal(await page.$eval('#portal-dialog', el => el.open), true);
+        await page.evaluate(() => { state.portalCredentialSaving = false; });
+        await page.touchscreen.tap(4, 4);
+        await page.waitForSelector('#portal-dialog:not([open])');
+        await click('[data-day="4"]');
+        await click('[data-portal-action="update"]');
+        await page.evaluate(() => { state.portalMutationBusy = true; });
+        await page.touchscreen.tap(4, 4);
+        assert.equal(await page.$eval('#portal-record-dialog', el => el.open), true);
+        await page.evaluate(() => { state.portalMutationBusy = false; });
+        await page.touchscreen.tap(4, 4);
+        await page.waitForSelector('#portal-record-dialog:not([open])');
+        await closeAll();
         phase = 'safe default and stale confirmation';
         await click('[data-day="1"]');
         await click('#remove-day-button');
@@ -194,6 +243,7 @@ async function main() {
         assert.deepEqual(mutations, []);
         const report = { ok: true, modalStates: cases.length, viewports: 5, checks: results.length, results,
             safeDefaultCancel: true, staleConfirmationBlocked: true, credentialDeletionModal: true, keyboardSizedViewport: true,
+            backdropDismissal: true, backdropNeverSavesDraft: true, backdropBusyGuards: true, dragOutPreservesDialog: true,
             physicalMobileDeviceTested: false, realPortalWrites: 0, nativeDialogs: 0, browserErrors: 0 };
         fs.writeFileSync(path.join(artifacts, 'modal-ui-smoke.json'), JSON.stringify(report, null, 2));
         console.log(JSON.stringify({ ...report, results: undefined }, null, 2));
