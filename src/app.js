@@ -492,9 +492,9 @@ function createApp(config, overrides = {}) {
         const schedule = db.getSchedule(req.auth.user.id, year, month) || {
             year,
             month,
-            content: '실습실 점검',
+            content: '',
             portalAssignment: null,
-            regularRules: [],
+            ...db.getRecurringRules(req.auth.user.id, year, month),
             specialDates: {},
             vacationDates: [],
             extraHolidayDates: [],
@@ -516,7 +516,13 @@ function createApp(config, overrides = {}) {
         validated.value.holidayDates = calendar.error
             ? db.getSchedule(req.auth.user.id, validated.value.year, validated.value.month)?.holidayDates || []
             : calendar.holidays.map((holiday) => holiday.day);
-        const schedule = db.saveSchedule(req.auth.user.id, validated.value);
+        let schedule;
+        try {
+            schedule = db.saveSchedule(req.auth.user.id, validated.value, req.body.recurringRuleRevision);
+        } catch (error) {
+            if (error.code === 'RECURRING_RULE_CONFLICT') return res.status(409).json({ error: error.message });
+            throw error;
+        }
         const preview = previewSchedule(schedule, new Set(schedule.extraHolidayDates));
         db.addAudit(req.auth.user.id, 'schedule_saved', { year: schedule.year, month: schedule.month, count: preview.count }, req.ip);
         res.json({ schedule, preview, calendar });
@@ -532,9 +538,20 @@ function createApp(config, overrides = {}) {
         if (activeVerifications.has(req.auth.user.id)) {
             return res.status(409).json({ error: '포털 로그인 확인 중입니다. 완료 후 다시 시도해주세요.' });
         }
-        const rate = jobLimiter(String(req.auth.user.id));
-        if (!rate.allowed) return res.status(429).json({ error: '작업 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' });
-        if (!db.getPortalCredential(req.auth.user.id)) return res.status(400).json({ error: '학교 포털 계정을 먼저 등록해주세요.' });
+        const credential = db.getPortalCredential(req.auth.user.id);
+        if (!credential) return res.status(400).json({ error: '학교 포털 계정을 먼저 등록해주세요.' });
+        if (type === 'query') {
+            const active = db.listJobs(req.auth.user.id).find(job => ['queued', 'running'].includes(job.status));
+            if (active?.type === 'query' && active.year === year && active.month === month) {
+                return res.status(202).json({ job: active, reused: true });
+            }
+            if (req.body.automatic === true) {
+                const snapshot = db.getPortalSnapshot(req.auth.user.id, year, month, credential.updated_at);
+                if (snapshot && Date.now() - Date.parse(snapshot.queriedAt) < 60_000) {
+                    return res.json({ snapshot, cached: true });
+                }
+            }
+        }
         let schedule = null;
         if (type === 'submit') {
             schedule = db.getSchedule(req.auth.user.id, year, month);
@@ -547,7 +564,14 @@ function createApp(config, overrides = {}) {
             }
         }
         if (queue.hasPendingForUser(req.auth.user.id) || activeMutations.has(req.auth.user.id)) {
-            return res.status(409).json({ error: '이미 대기 중이거나 실행 중인 작업이 있습니다.' });
+            const job = queue.hasPendingForUser(req.auth.user.id)
+                ? db.listJobs(req.auth.user.id).find(item => ['queued', 'running'].includes(item.status)) : null;
+            return res.status(409).json({ error: '이미 대기 중이거나 실행 중인 작업이 있습니다.', job, retryAfterMs: 5_000 });
+        }
+        const rate = jobLimiter(String(req.auth.user.id));
+        if (!rate.allowed) {
+            res.setHeader('Retry-After', String(rate.retryAfter));
+            return res.status(429).json({ error: '작업 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.', retryAfterMs: rate.retryAfter * 1000 });
         }
 
         const job = db.createJob({

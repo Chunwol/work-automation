@@ -49,7 +49,7 @@ function validateSchedulePayload(payload, yearParam, monthParam) {
     if (!Number.isInteger(month) || month < 1 || month > 12) errors.push('월 범위가 올바르지 않습니다.');
 
     const content = String(payload?.content || '').trim();
-    if (!content || Buffer.byteLength(content, 'utf8') > 100) errors.push('근무내용은 UTF-8 기준 1~100바이트로 입력해주세요.');
+    if (Buffer.byteLength(content, 'utf8') > 100) errors.push('근무내용은 UTF-8 기준 100바이트 이내로 입력해주세요.');
 
     let portalAssignment = null;
     if (payload?.portalAssignment !== null && payload?.portalAssignment !== undefined) {

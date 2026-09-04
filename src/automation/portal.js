@@ -151,7 +151,7 @@ async function preflight(client, snapshot, logs, { onStep = () => {} } = {}) {
         if (minutes < 60 || minutes % 30 !== 0) throw new Error(`${log.date}: 근무시간은 최소 1시간, 30분 단위여야 합니다.`);
         const increment = NATIONAL.has(assignment.scholarshipCode) ? 10 : assignment.scholarshipCode === '50064' ? 30 : 1;
         if (Number(log.start.slice(2)) % increment !== 0) throw new Error(`${log.date}: 시작시간은 ${increment}분 단위여야 합니다.`);
-        if (!log.content.trim() || Buffer.byteLength(log.content, 'utf8') > 100) throw new Error('근무내용은 UTF-8 기준 1~100바이트여야 합니다.');
+        if (Buffer.byteLength(log.content, 'utf8') > 100) throw new Error('근무내용은 UTF-8 기준 100바이트 이내여야 합니다.');
         const daily = all.filter((record) => record.date === log.date);
         if (daily.some((record) => log.start < record.end && record.start < log.end)) throw new Error(`${log.date}: 다른 배정을 포함하여 기존 근무시간과 겹칩니다.`);
         if (daily.reduce((sum, record) => sum + duration(record), minutes) > 480) throw new Error(`${log.date}: 하루 근로시간 8시간을 초과합니다.`);

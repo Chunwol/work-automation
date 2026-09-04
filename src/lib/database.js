@@ -6,6 +6,11 @@ function nowIso() {
     return new Date().toISOString();
 }
 
+function ruleKey(rules) {
+    return JSON.stringify(rules.map(({ day, start, end }) => ({ day, start, end }))
+        .sort((a, b) => a.day - b.day || a.start.localeCompare(b.start) || a.end.localeCompare(b.end)));
+}
+
 function parseJson(value, fallback) {
     try {
         return value ? JSON.parse(value) : fallback;
@@ -170,6 +175,21 @@ function createDatabase(databasePath) {
         if (!scheduleColumns.has(column)) db.exec(`ALTER TABLE schedules ADD COLUMN ${column} TEXT NOT NULL DEFAULT '[]'`);
     }
 
+    // Seed legacy monthly rules exactly once; later monthly saves must not freeze inherited rules.
+    db.transaction(() => {
+        if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'recurring_rules'").get()) return;
+        db.exec(`CREATE TABLE recurring_rules (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            effective_month INTEGER NOT NULL,
+            rules_json TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, effective_month)
+        );
+        INSERT INTO recurring_rules (user_id, effective_month, rules_json, updated_at)
+        SELECT user_id, year * 100 + month, regular_rules_json, updated_at FROM schedules;`);
+    })();
+
     db.prepare(`
         UPDATE jobs
         SET status = 'failed', error_message = '서버 재시작으로 작업이 중단되었습니다.',
@@ -201,6 +221,12 @@ function createDatabase(databasePath) {
         getCredential: db.prepare('SELECT * FROM portal_credentials WHERE user_id = ?'),
         deleteCredential: db.prepare('DELETE FROM portal_credentials WHERE user_id = ?'),
         getSchedule: db.prepare('SELECT * FROM schedules WHERE user_id = ? AND year = ? AND month = ?'),
+        getRecurringRules: db.prepare('SELECT * FROM recurring_rules WHERE user_id = ? AND effective_month <= ? ORDER BY effective_month DESC LIMIT 1'),
+        saveRecurringRules: db.prepare(`
+            INSERT INTO recurring_rules (user_id, effective_month, rules_json, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, effective_month) DO UPDATE SET
+                rules_json = excluded.rules_json, revision = recurring_rules.revision + 1, updated_at = excluded.updated_at
+        `),
         upsertSchedule: db.prepare(`
             INSERT INTO schedules (
                 user_id, year, month, content, portal_assignment_json, regular_rules_json, special_dates_json,
@@ -267,6 +293,45 @@ function createDatabase(databasePath) {
         `)
     };
 
+    function getRecurringRules(userId, year, month) {
+        const row = statements.getRecurringRules.get(userId, year * 100 + month);
+        return {
+            regularRules: row ? parseJson(row.rules_json, []) : [],
+            recurringRuleRevision: row ? `${row.effective_month}:${row.revision}` : null,
+            recurringRuleFrom: row?.effective_month || null
+        };
+    }
+
+    function getSchedule(userId, year, month) {
+        const schedule = toSchedule(statements.getSchedule.get(userId, year, month));
+        return schedule ? { ...schedule, ...getRecurringRules(userId, year, month) } : null;
+    }
+
+    const saveSchedule = db.transaction((userId, schedule, expectedRevision) => {
+        const current = getRecurringRules(userId, schedule.year, schedule.month);
+        if (expectedRevision !== undefined && expectedRevision !== current.recurringRuleRevision) {
+            const error = new Error('다른 화면에서 반복 설정이 바뀌었습니다. 변경 내용을 확인하고 새로고침한 뒤 다시 저장해주세요.');
+            error.code = 'RECURRING_RULE_CONFLICT';
+            throw error;
+        }
+        const now = nowIso();
+        if (ruleKey(current.regularRules) !== ruleKey(schedule.regularRules)) {
+            statements.saveRecurringRules.run(userId, schedule.year * 100 + schedule.month, JSON.stringify(schedule.regularRules), now);
+        }
+        statements.upsertSchedule.run({
+            userId, year: schedule.year, month: schedule.month, content: schedule.content,
+            portalAssignmentJson: schedule.portalAssignment ? JSON.stringify(schedule.portalAssignment) : null,
+            regularRulesJson: JSON.stringify(schedule.regularRules),
+            specialDatesJson: JSON.stringify(schedule.specialDates),
+            vacationDatesJson: JSON.stringify(schedule.vacationDates),
+            extraHolidayDatesJson: JSON.stringify(schedule.extraHolidayDates),
+            holidayDatesJson: JSON.stringify(schedule.holidayDates || []),
+            holidayWorkDatesJson: JSON.stringify(schedule.holidayWorkDates || []),
+            cleanupUnexpectedRows: schedule.cleanupUnexpectedRows ? 1 : 0, now
+        });
+        return getSchedule(userId, schedule.year, schedule.month);
+    });
+
     return {
         raw: db,
         close: () => db.close(),
@@ -299,26 +364,9 @@ function createDatabase(databasePath) {
         },
         getPortalCredential: (userId) => statements.getCredential.get(userId) || null,
         deletePortalCredential: (userId) => statements.deleteCredential.run(userId).changes > 0,
-        getSchedule: (userId, year, month) => toSchedule(statements.getSchedule.get(userId, year, month)),
-        saveSchedule(userId, schedule) {
-            const now = nowIso();
-            statements.upsertSchedule.run({
-                userId,
-                year: schedule.year,
-                month: schedule.month,
-                content: schedule.content,
-                portalAssignmentJson: schedule.portalAssignment ? JSON.stringify(schedule.portalAssignment) : null,
-                regularRulesJson: JSON.stringify(schedule.regularRules),
-                specialDatesJson: JSON.stringify(schedule.specialDates),
-                vacationDatesJson: JSON.stringify(schedule.vacationDates),
-                extraHolidayDatesJson: JSON.stringify(schedule.extraHolidayDates),
-                holidayDatesJson: JSON.stringify(schedule.holidayDates || []),
-                holidayWorkDatesJson: JSON.stringify(schedule.holidayWorkDates || []),
-                cleanupUnexpectedRows: schedule.cleanupUnexpectedRows ? 1 : 0,
-                now
-            });
-            return toSchedule(statements.getSchedule.get(userId, schedule.year, schedule.month));
-        },
+        getSchedule,
+        getRecurringRules,
+        saveSchedule,
         createSession({ tokenHash, userId, csrfToken, expiresAt }) {
             statements.createSession.run({ tokenHash, userId, csrfToken, createdAt: nowIso(), expiresAt });
         },

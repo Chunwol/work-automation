@@ -62,6 +62,15 @@ function options(client, overrides = {}) {
             regularRules: [], specialDates: { 1: { start: '1300', end: '1700' } }, vacationDates: [], extraHolidayDates: [] }, ...overrides };
 }
 
+test('empty work content can be inserted and verified without a fabricated default', async () => {
+    const client = new FakePortal();
+    const opts = options(client);
+    opts.schedule.content = '';
+    assert.equal((await runPortalAutomation(opts)).insertedCount, 1);
+    assert.equal(client.saves[0].row.REMARK, '');
+    assert.equal((await runPortalAutomation(opts)).insertedCount, 0);
+});
+
 test('HTTP redirects carry scoped cookies but do not replay passwords across origins', async () => {
     const requests = [];
     const client = new PortalHttpClient({ fetchImpl: async (url, init) => {

@@ -30,6 +30,47 @@ const state = {
     assignmentSelectionJobId: null
 };
 
+const portalSnapshots = new Map();
+const autoQueryAttempts = new Map();
+const quietJobs = new Set();
+let autoQueryTimer = null;
+let jobRequestBusy = false;
+let scheduleSaving = false;
+let monthSaving = false;
+let portalSessionVersion = 0;
+
+function portalMonthKey(year = state.year, month = state.month) {
+    return `${state.user?.id}:${portalSessionVersion}:${year}:${month}`;
+}
+
+function resetPortalReads() {
+    clearTimeout(autoQueryTimer);
+    autoQueryTimer = null;
+    portalSessionVersion += 1;
+    portalSnapshots.clear();
+    autoQueryAttempts.clear();
+    quietJobs.clear();
+    state.portalReadVersion += 1;
+    state.portalAssignments = [];
+    state.portalSnapshot = null;
+    state.portalSnapshotError = '';
+}
+
+function scheduleAutoPortalQuery(delay = 600) {
+    clearTimeout(autoQueryTimer);
+    if (!state.user || !state.portalCredential.configured) return;
+    const key = portalMonthKey();
+    autoQueryTimer = setTimeout(() => {
+        if (key !== portalMonthKey() || state.schedule?.year !== state.year || state.schedule?.month !== state.month) return;
+        if (jobRequestBusy) { scheduleAutoPortalQuery(); return; }
+        const active = state.jobs.find(job => ['queued', 'running'].includes(job.status));
+        if (active) { subscribeToJob(active.id); return; }
+        if (Date.now() - Date.parse(state.portalSnapshot?.queriedAt) < 60_000) return;
+        if (Date.now() - (autoQueryAttempts.get(key) || 0) < 60_000) return;
+        void createJob('query', { automatic: true });
+    }, delay);
+}
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 let pendingConfirmation = null;
@@ -522,15 +563,17 @@ function portalRecordsForDay(day) {
 function renderPortalCalendarSummary() {
     const element = $('#portal-calendar-summary');
     const snapshot = state.portalSnapshot;
+    const refreshing = state.jobs.some(job => job.type === 'query' && job.year === state.year && job.month === state.month
+        && ['queued', 'running'].includes(job.status));
     if (!snapshot) {
-        element.innerHTML = `<strong>${state.portalSnapshotError ? '포털 기록 불러오기 실패' : '포털 기록 미조회'}</strong>`;
+        element.innerHTML = `<strong>${state.portalSnapshotError ? '포털 기록 불러오기 실패' : refreshing ? '포털 기록 조회 중' : '포털 기록 미조회'}</strong>${state.portalSnapshotError ? `<small>${escapeHtml(state.portalSnapshotError)}</small>` : ''}`;
         return;
     }
     const minutes = snapshot.records.reduce((sum, record) => sum + Math.max(0, (timeToMinutes(record.end) || 0) - (timeToMinutes(record.start) || 0)), 0);
     const duration = formatDuration(minutes);
     const days = new Set(snapshot.records.map((record) => record.date)).size;
     const updated = new Date(snapshot.queriedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    element.innerHTML = `<strong>포털 기록 ${snapshot.records.length}건 · ${days}일 · ${duration.hours}시간${duration.minutes ? ` ${duration.minutes}분` : ''}</strong><small>${escapeHtml(updated)} 조회${state.portalSnapshotError ? ' · 갱신 실패, 이전 기록' : ''}</small>`;
+    element.innerHTML = `<strong>포털 기록 ${snapshot.records.length}건 · ${days}일 · ${duration.hours}시간${duration.minutes ? ` ${duration.minutes}분` : ''}</strong><small>${escapeHtml(updated)} 조회${refreshing ? ' · 갱신 중, 이전 기록' : state.portalSnapshotError ? ' · 갱신 실패, 이전 기록' : ''}</small>`;
 }
 
 function renderDayPortalRecords(day) {
@@ -597,14 +640,18 @@ async function submitPortalRecordChange(event) {
     }
 }
 
-async function loadPortalSnapshot() {
+async function loadPortalSnapshot({ preserveError = false } = {}) {
     const version = ++state.portalReadVersion;
     const { year, month, user } = state;
+    const key = portalMonthKey(year, month);
     try {
         const data = await api(`/api/portal-records/${year}/${month}`);
         if (version !== state.portalReadVersion || state.user?.id !== user?.id || year !== state.year || month !== state.month) return;
         state.portalSnapshot = data.snapshot;
-        state.portalSnapshotError = '';
+        state.portalAssignments = data.snapshot?.assignments || [];
+        if (data.snapshot) portalSnapshots.set(key, data.snapshot);
+        else portalSnapshots.delete(key);
+        if (!preserveError) state.portalSnapshotError = '';
     } catch (error) {
         if (version !== state.portalReadVersion || state.user?.id !== user?.id || year !== state.year || month !== state.month) return;
         state.portalSnapshotError = error.message;
@@ -625,11 +672,18 @@ async function loadSchedule() {
     const version = ++state.scheduleReadVersion;
     const { year, month, user } = state;
     state.portalReadVersion += 1;
-    state.portalSnapshot = null;
+    state.portalSnapshot = portalSnapshots.get(portalMonthKey()) || null;
+    state.portalAssignments = state.portalSnapshot?.assignments || [];
     state.portalSnapshotError = '';
     $('#calendar').innerHTML = '<p class="calendar-loading">일정을 불러오고 있습니다.</p>';
     $('#month-label').textContent = `${state.year}. ${String(state.month).padStart(2, '0')}`;
-    const data = await api(`/api/schedules/${year}/${month}`);
+    const snapshotRead = loadPortalSnapshot();
+    let data;
+    try { data = await api(`/api/schedules/${year}/${month}`); }
+    catch (error) {
+        if (version === state.scheduleReadVersion && user?.id === state.user?.id) toast(error.message, 'error');
+        return;
+    }
     if (version !== state.scheduleReadVersion || user?.id !== state.user?.id || year !== state.year || month !== state.month) return;
     state.schedule = data.schedule;
     state.calendar = data.calendar || { holidays: [], error: null };
@@ -637,11 +691,21 @@ async function loadSchedule() {
     setDirty(false);
     renderAssignmentSummary();
     renderCalendar();
-    await loadPortalSnapshot();
+    await snapshotRead;
+    if (version === state.scheduleReadVersion) scheduleAutoPortalQuery();
 }
 
 async function changeMonth(offset) {
+    if (monthSaving) return;
+    if (state.dirty) {
+        monthSaving = true;
+        let saved;
+        try { saved = await saveSchedule({ quiet: true }); }
+        finally { monthSaving = false; }
+        if (!saved) return;
+    }
     const date = new Date(state.year, state.month - 1 + offset, 1);
+    if (date.getFullYear() < 2020 || date.getFullYear() > 2100) return;
     state.year = date.getFullYear();
     state.month = date.getMonth() + 1;
     await loadSchedule();
@@ -814,7 +878,7 @@ async function applyRepeatRules() {
     const revision = scheduleRevision();
     if (!await confirmAction({ title: '요일 반복 일정을 적용할까요?',
         message: `${state.year}년 ${state.month}월 · ${preview.count}일 · ${duration.hours}시간 ${duration.minutes}분`,
-        details: ['날짜별 설정과 제외일은 유지합니다. 포털에는 아직 저장하지 않습니다.',
+        details: ['이 월부터 다음 변경 전까지 계속 반복합니다. 날짜별 설정과 제외일은 유지하며 포털에는 등록하지 않습니다.',
             ...(state.calendar.error ? ['공휴일 조회에 실패했습니다. 제외일을 직접 확인해주세요.'] : [])], confirmLabel: '반복 일정 적용' })) return false;
     if (!verifyScheduleRevision(revision)) return false;
     state.schedule.regularRules = rules;
@@ -823,25 +887,38 @@ async function applyRepeatRules() {
     return true;
 }
 
-async function saveSchedule() {
+async function saveSchedule({ quiet = false } = {}) {
+    if (scheduleSaving || state.schedule?.year !== state.year || state.schedule?.month !== state.month) return false;
+    scheduleSaving = true;
     const button = $('#save-schedule-button');
     state.schedule.content = $('#work-content').value.trim();
+    const revision = scheduleRevision();
+    const userId = state.user?.id;
+    const { year, month } = state;
     setButtonBusy(button, true, '저장 중...');
     try {
         const data = await api(`/api/schedules/${state.year}/${state.month}`, {
             method: 'PUT',
             body: state.schedule
         });
+        if (userId !== state.user?.id || year !== state.year || month !== state.month) return false;
+        if (revision !== scheduleRevision()) {
+            state.schedule.recurringRuleRevision = data.schedule.recurringRuleRevision;
+            state.schedule.recurringRuleFrom = data.schedule.recurringRuleFrom;
+            toast('저장 중 추가로 편집한 내용이 있습니다. 한 번 더 저장해주세요.');
+            return false;
+        }
         state.schedule = data.schedule;
         state.calendar = data.calendar || state.calendar;
         setDirty(false);
         renderCalendar();
-        toast('일정이 저장되었습니다.', 'success');
+        if (!quiet) toast('일정이 저장되었습니다.', 'success');
         return true;
     } catch (error) {
         toast(error.message, 'error');
         return false;
     } finally {
+        scheduleSaving = false;
         setButtonBusy(button, false);
     }
 }
@@ -868,8 +945,9 @@ async function savePortalCredential(event) {
         updatePortalSummary();
         $('#portal-form').reset();
         $('#portal-dialog').close();
-        state.portalSnapshot = null;
+        resetPortalReads();
         await loadPortalSnapshot();
+        scheduleAutoPortalQuery();
         toast('로그인 확인 후 포털 계정을 암호화하여 저장했습니다.', 'success');
     } catch (error) {
         showError($('#portal-error'), error.message);
@@ -894,7 +972,7 @@ async function deletePortalCredential() {
         state.portalCredential = { configured: false };
         updatePortalSummary();
         $('#portal-dialog').close();
-        state.portalSnapshot = null;
+        resetPortalReads();
         await loadPortalSnapshot();
         toast('포털 계정 정보를 삭제했습니다.');
     } catch (error) {
@@ -1010,7 +1088,9 @@ function updateAutomationStatus(job) {
 }
 
 async function loadJobs() {
+    const userId = state.user?.id;
     const data = await api('/api/jobs');
+    if (userId !== state.user?.id) return;
     state.jobs = data.jobs;
     renderJobs();
     const active = state.jobs.find((job) => ['queued', 'running'].includes(job.status));
@@ -1025,15 +1105,21 @@ async function loadJobDetails(id) {
 }
 
 function subscribeToJob(id) {
+    if (state.eventSource?.jobId === id) return;
     state.eventSource?.close();
     const source = new EventSource(`/api/jobs/${id}/events`);
+    source.jobId = id;
+    const sessionVersion = portalSessionVersion;
+    const userId = state.user?.id;
     state.eventSource = source;
     source.addEventListener('job', (event) => {
+        if (state.eventSource !== source || userId !== state.user?.id || sessionVersion !== portalSessionVersion) return;
         const job = JSON.parse(event.data);
         const index = state.jobs.findIndex((item) => item.id === job.id);
         if (index >= 0) state.jobs[index] = job;
         else state.jobs.unshift(job);
         renderJobs();
+        renderPortalCalendarSummary();
         if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
             source.close();
             state.eventSource = null;
@@ -1041,40 +1127,76 @@ function subscribeToJob(id) {
                 state.assignmentSelectionJobId = null;
                 if (job.status === 'succeeded' && job.year === state.year && job.month === state.month) handleAssignmentQueryResult(job.summary?.assignments || []);
             }
-            void loadPortalSnapshot();
-            toast(job.status === 'succeeded' ? '작업이 완료되었습니다.' : '작업이 실패했습니다. 로그를 확인해주세요.', job.status === 'succeeded' ? 'success' : 'error');
+            if (job.year === state.year && job.month === state.month && job.status !== 'succeeded') {
+                state.portalSnapshotError = job.errorMessage || '포털 조회에 실패했습니다. 기록만 조회로 다시 시도해주세요.';
+            }
+            void loadPortalSnapshot({ preserveError: job.status !== 'succeeded' }).then(() => scheduleAutoPortalQuery());
+            if (!quietJobs.delete(job.id)) toast(job.status === 'succeeded' ? '작업이 완료되었습니다.' : '작업이 실패했습니다. 로그를 확인해주세요.', job.status === 'succeeded' ? 'success' : 'error');
         }
     });
     source.onerror = () => {
-        if (source.readyState === EventSource.CLOSED) state.eventSource = null;
+        if (source.readyState === EventSource.CLOSED && state.eventSource === source) state.eventSource = null;
     };
 }
 
 async function createJob(type, options = {}) {
+    const automatic = options.automatic === true;
     if (!state.portalCredential.configured) {
+        if (automatic) return;
         toast('학교 포털 계정을 먼저 등록해주세요.', 'error');
         $('#portal-dialog').showModal();
         return;
     }
+    if (jobRequestBusy) return;
+    jobRequestBusy = true;
+    const { year, month } = state;
+    const key = portalMonthKey(year, month);
+    const userId = state.user?.id;
+    const sessionVersion = portalSessionVersion;
+    const sameSession = () => userId === state.user?.id && sessionVersion === portalSessionVersion;
+    if (automatic) autoQueryAttempts.set(key, Date.now());
     const button = type === 'query' ? $('#query-button') : $('#confirm-run-button');
-    setButtonBusy(button, true, type === 'query' ? '조회 요청 중...' : '실행 요청 중...');
+    if (!automatic) setButtonBusy(button, true, type === 'query' ? '조회 요청 중...' : '실행 요청 중...');
     try {
         const data = await api('/api/jobs', {
             method: 'POST',
-            body: { type, year: state.year, month: state.month }
+            body: { type, year, month, automatic }
         });
-        state.jobs.unshift(data.job);
-        state.expandedJobId = data.job.id;
+        if (!sameSession()) return;
+        if (data.cached) {
+            portalSnapshots.set(key, data.snapshot);
+            if (key === portalMonthKey()) await loadPortalSnapshot();
+            return;
+        }
+        state.jobs = [data.job, ...state.jobs.filter(job => job.id !== data.job.id)];
+        if (automatic) quietJobs.add(data.job.id);
+        else state.expandedJobId = data.job.id;
         if (options.selectAssignment) state.assignmentSelectionJobId = data.job.id;
         renderJobs();
+        renderPortalCalendarSummary();
         subscribeToJob(data.job.id);
         if (type === 'submit') $('#run-dialog').close();
-        toast(type === 'query' ? '포털 조회를 시작했습니다.' : '자동 입력을 시작했습니다.', 'success');
+        if (!automatic) toast(type === 'query' ? '포털 조회를 시작했습니다.' : '자동 입력을 시작했습니다.', 'success');
         return data.job;
     } catch (error) {
-        toast(error.message, 'error');
+        if (!sameSession()) return;
+        if (automatic && error.payload?.retryAfterMs) {
+            autoQueryAttempts.delete(key);
+            if (error.payload.job) {
+                const job = error.payload.job;
+                state.jobs = [job, ...state.jobs.filter(item => item.id !== job.id)];
+                quietJobs.add(job.id);
+                subscribeToJob(job.id);
+            } else scheduleAutoPortalQuery(Math.max(1000, error.payload.retryAfterMs));
+        } else if (!automatic) toast(error.message, 'error');
+        if (key === portalMonthKey()) {
+            state.portalSnapshotError = error.message;
+            renderPortalCalendarSummary();
+        }
     } finally {
-        setButtonBusy(button, false);
+        jobRequestBusy = false;
+        if (!automatic) setButtonBusy(button, false);
+        if (sameSession() && key !== portalMonthKey()) scheduleAutoPortalQuery();
     }
 }
 
@@ -1140,6 +1262,17 @@ async function openAssignmentSelection() {
         $('#portal-dialog').showModal();
         return;
     }
+    if (state.portalSnapshot && Date.now() - Date.parse(state.portalSnapshot.queriedAt) < 60_000) {
+        handleAssignmentQueryResult(state.portalSnapshot.assignments || []);
+        return;
+    }
+    const active = state.jobs.find(job => job.type === 'query' && job.year === state.year && job.month === state.month
+        && ['queued', 'running'].includes(job.status));
+    if (active) {
+        state.assignmentSelectionJobId = active.id;
+        subscribeToJob(active.id);
+        return;
+    }
     await createJob('query', { selectAssignment: true });
 }
 
@@ -1162,7 +1295,7 @@ async function openRunDialog() {
         <div><span>대상 연월</span><strong>${state.year}. ${String(state.month).padStart(2, '0')}</strong></div>
         <div><span>예상 입력</span><strong>${preview.count}일 · ${preview.entryCount}구간</strong></div>
         <div><span>예상 시수</span><strong>${duration.hours}시간 ${duration.minutes}분</strong></div>
-        <div><span>근무 내용</span><strong>${escapeHtml(state.schedule.content)}</strong></div>
+        <div><span>근무 내용</span><strong>${escapeHtml(state.schedule.content || '미입력')}</strong></div>
         <div class="run-assignment"><span>장학 유형</span><strong>${escapeHtml(state.schedule.portalAssignment.scholarshipName || state.schedule.portalAssignment.scholarshipCode)}</strong></div>
         <div class="run-assignment"><span>근무지</span><strong>${escapeHtml(state.schedule.portalAssignment.workDepartmentName || state.schedule.portalAssignment.workDepartmentCode)}</strong></div>`;
     $('#run-confirm-checkbox').checked = false;
@@ -1392,9 +1525,8 @@ function bindEvents() {
     $('#previous-month').addEventListener('click', () => changeMonth(-1));
     $('#next-month').addEventListener('click', () => changeMonth(1));
     $('#month-label').addEventListener('click', async () => {
-        state.year = new Date().getFullYear();
-        state.month = new Date().getMonth() + 1;
-        await loadSchedule();
+        const now = new Date();
+        await changeMonth((now.getFullYear() - state.year) * 12 + now.getMonth() + 1 - state.month);
     });
     $('#work-content').addEventListener('input', () => {
         state.schedule.content = $('#work-content').value;
@@ -1475,6 +1607,8 @@ function bindEvents() {
     $('#logout-button').addEventListener('click', async () => {
         try { await api('/api/logout', { method: 'POST' }); } catch {}
         state.eventSource?.close();
+        state.eventSource = null;
+        resetPortalReads();
         clearInterval(jobClockTimer);
         jobClockTimer = null;
         state.user = null;
