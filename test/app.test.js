@@ -25,6 +25,27 @@ function testConfig() {
     };
 }
 
+test('HTML and frontend assets revalidate on reload and use a release-specific asset URL', async t => {
+    const runtime = createApp({ ...testConfig(), nodeEnv: 'production', revision: 'release-test-123' });
+    t.after(() => runtime.db.close());
+    const agent = request(runtime.app);
+    for (const route of ['/', '/index.html', '/schedule']) {
+        const response = await agent.get(route);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers['cache-control'], 'no-cache');
+        assert.match(response.text, /href="\/styles\.css\?v=release-test-123"/);
+        assert.match(response.text, /src="\/app\.js\?v=release-test-123"/);
+    }
+    for (const route of ['/styles.css?v=release-test-123', '/app.js?v=release-test-123']) {
+        const response = await agent.get(route);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers['cache-control'], 'no-cache');
+        assert.ok(response.headers.etag);
+        const cached = await agent.get(route).set('If-None-Match', response.headers.etag);
+        assert.equal(cached.status, 304);
+    }
+});
+
 async function waitForJob(agent, jobId, timeoutMs = 2_000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {

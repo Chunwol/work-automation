@@ -654,9 +654,18 @@ function readRangeEditor(editor) {
 function syncRangeEditor(editor) {
     const enabled = editor.dataset.rangeEditor === 'day' ? !$('#day-excluded').checked : $('input[type="checkbox"]', editor).checked;
     const rows = $$('.work-range', editor);
-    if (editor.dataset.rangeEditor === 'repeat') $('[data-range-list]', editor).hidden = !enabled;
+    if (editor.dataset.rangeEditor === 'repeat') {
+        $('[data-range-list]', editor).hidden = !enabled;
+        $('[data-add-range]', editor).hidden = !enabled;
+        editor.classList.toggle('repeat-enabled', enabled);
+        const selected = $$('.repeat-row input[type="checkbox"]:checked').length;
+        $('#repeat-selection-count').textContent = selected ? `${selected}일 선택` : '요일 선택';
+    }
     $$('.time-input', editor).forEach(input => { input.disabled = !enabled; });
-    $$('[data-remove-range]', editor).forEach(button => { button.disabled = !enabled || rows.length === 1; });
+    $$('[data-remove-range]', editor).forEach(button => {
+        button.disabled = !enabled || rows.length === 1;
+        button.hidden = editor.dataset.rangeEditor === 'repeat' && rows.length === 1;
+    });
     $('[data-add-range]', editor).disabled = !enabled || rows.length >= 8;
 }
 
@@ -752,8 +761,8 @@ function renderRepeatRules() {
         const enabled = state.schedule.regularRules.some((item) => item.day === day);
         return `
             <div class="repeat-row" data-repeat-day="${day}" data-range-editor="repeat">
-                <div class="range-toolbar"><label class="repeat-day-field"><input type="checkbox" ${enabled ? 'checked' : ''}>${name}</label><button type="button" class="button button-quiet range-add" data-add-range aria-label="${name} 구간 추가">구간 추가</button></div>
-                <div class="range-list" data-range-list></div>
+                <div class="range-toolbar"><label class="repeat-day-field"><input type="checkbox" role="switch" aria-controls="repeat-ranges-${day}" ${enabled ? 'checked' : ''}><span>${name}</span></label><button type="button" class="button button-quiet range-add" data-add-range aria-label="${name} 구간 추가">구간 추가</button></div>
+                <div id="repeat-ranges-${day}" class="range-list" data-range-list></div>
             </div>`;
     }).join('');
     $$('.repeat-row').forEach((row) => {

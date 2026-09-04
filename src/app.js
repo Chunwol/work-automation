@@ -659,8 +659,18 @@ function createApp(config, overrides = {}) {
     });
 
     app.use('/api', (req, res) => res.status(404).json({ error: '요청한 API를 찾을 수 없습니다.' }));
-    app.use(express.static(config.publicDir, { etag: true, maxAge: config.nodeEnv === 'production' ? '1h' : 0 }));
-    app.get('/{*splat}', (req, res) => res.sendFile(path.join(config.publicDir, 'index.html')));
+    const serveIndex = (req, res, next) => {
+        fs.readFile(path.join(config.publicDir, 'index.html'), 'utf8', (error, html) => {
+            if (error) return next(error);
+            const revision = encodeURIComponent(config.revision || 'development');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.type('html').send(html.replace('href="/styles.css"', `href="/styles.css?v=${revision}"`)
+                .replace('src="/app.js"', `src="/app.js?v=${revision}"`));
+        });
+    };
+    app.get(['/', '/index.html'], serveIndex);
+    app.use(express.static(config.publicDir, { etag: true, maxAge: 0 }));
+    app.get('/{*splat}', serveIndex);
 
     app.use((error, req, res, next) => {
         if (res.headersSent) return next(error);

@@ -477,12 +477,19 @@ body:has(dialog[open]) { overflow: hidden; }
 .job-timing { margin-top: 6px; color: var(--ink-soft); font-size: .68rem; font-variant-numeric: tabular-nums; }
 .job-stage { margin: 8px 0 0; color: var(--ink-soft); font-size: .74rem; overflow-wrap: anywhere; }
 .repeat-list { display: grid; gap: 0; }
-.repeat-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 12px 10px; }
+.repeat-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 4px 10px; }
+.repeat-row.repeat-enabled { padding-bottom: 12px; }
 .repeat-row + .repeat-row::before { content: ""; position: absolute; top: 0; right: 10px; left: 10px; height: 1px; background: var(--line); }
-.repeat-day-field { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: .78rem; font-weight: 850; }
+.repeat-day-field { display: flex; flex: 1; align-items: center; gap: 12px; min-height: 44px; font-size: .84rem; font-weight: 750; cursor: pointer; }
+.repeat-enabled .repeat-day-field { color: var(--blue); }
+.repeat-selection-count { flex-shrink: 0; margin: 0; padding-inline: 12px; color: var(--ink-soft); font-size: .75rem; }
 .repeat-time-field { display: grid; gap: 4px; min-width: 0; }
 .repeat-time-field > span { color: var(--ink-soft); font-size: .68rem; }
-.repeat-row input[type="checkbox"] { accent-color: var(--blue); }
+.repeat-row input[type="checkbox"] { appearance: none; flex-shrink: 0; width: 34px; height: 20px; margin: 0; padding: 3px; border: 0; border-radius: 20px; background: #8190a5; cursor: pointer; }
+.repeat-row input[type="checkbox"]::before { content: ""; display: block; width: 14px; height: 14px; border-radius: 50%; background: var(--white); }
+.repeat-row input[type="checkbox"]:checked { background: var(--blue); }
+.repeat-row input[type="checkbox"]:checked::before { transform: translateX(14px); }
+.repeat-row input[type="checkbox"]:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
 .repeat-row .time-input { width: 100%; min-width: 0; height: 48px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: white; font-size: 1rem; text-align: center; }
 .time-input { font-variant-numeric: tabular-nums; letter-spacing: .05em; }
 .schedule-dragging, .schedule-dragging * { cursor: copy !important; user-select: none !important; }
@@ -497,13 +504,15 @@ body:has(dialog[open]) { overflow: hidden; }
 .range-add { min-height: 44px; font-size: .8rem; }
 .range-arrow { text-align: center; color: var(--ink-soft); }
 .repeat-row > span { color: #8d9699; text-align: center; }
-#repeat-dialog { --repeat-height: min(calc(var(--dialog-viewport-height, 100dvh) - 32px), 850px); width: min(calc(100% - 32px), 680px); max-height: var(--repeat-height); overflow: hidden; }
+#repeat-dialog { --repeat-height: min(calc(var(--dialog-viewport-height, 100dvh) - 32px), 850px); width: min(calc(100% - 32px), 640px); max-height: var(--repeat-height); overflow: hidden; }
 #repeat-form { display: flex; flex-direction: column; max-height: calc(var(--repeat-height) - 2 * var(--modal-padding) - 2px); }
 #repeat-form .modal-header, #repeat-form .modal-actions { position: static; flex-shrink: 0; }
 #repeat-form .modal-header { padding-bottom: 0; }
 #repeat-form .modal-actions { margin-top: 0; padding-bottom: 0; }
 #repeat-list { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; align-content: start; padding: 2px; }
 .repeat-row .range-toolbar { margin-bottom: 0; }
+.repeat-row .range-add { padding-inline: 10px; border-color: transparent; background: transparent; color: var(--blue); box-shadow: none; }
+.repeat-row .range-add:hover:not(:disabled) { background: var(--blue-soft); }
 .repeat-row .range-list { gap: 0; margin-inline: 8px; }
 .repeat-row .work-range { position: relative; grid-template-columns: 44px minmax(0, 1fr) 16px minmax(0, 1fr) 44px; grid-template-areas: "index start arrow end remove"; align-items: end; padding: 10px 0; border: 0; border-radius: 0; background: transparent; }
 .repeat-row .work-range + .work-range::before { content: ""; position: absolute; top: 0; right: 0; left: 0; height: 1px; background: var(--line); }
@@ -630,7 +639,7 @@ body:has(dialog[open]) { overflow: hidden; }
     .split-actions span { display: none; }
     .modal-actions .button { width: 100%; padding: 10px; font-size: .85rem; min-width: 0; }
     .split-actions .button-primary:last-child { grid-column: 1 / -1; }
-    .repeat-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .repeat-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
     .repeat-day-field { grid-column: 1 / -1; }
     .admin-layout { grid-template-columns: 1fr; }
     .admin-user { grid-template-columns: minmax(0, 1fr) auto; }
@@ -662,6 +671,11 @@ body:has(dialog[open]) { overflow: hidden; }
     .day-copy-fields { align-items: stretch; flex-direction: column; }
     .admin-user { grid-template-columns: 1fr; }
     .admin-user select { grid-column: 1; grid-row: auto; }
+}
+
+@media (forced-colors: active) {
+    .repeat-row input[type="checkbox"] { appearance: auto; width: 20px; height: 20px; padding: 0; }
+    .repeat-row input[type="checkbox"]::before { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -131,6 +131,22 @@ async function main() {
         await page.$eval('#repeat-dialog', async el => {
             await Promise.all(el.getAnimations().map(animation => animation.finished));
         });
+        phase = 'compact inactive weekdays and keyboard toggles';
+        for (const width of [1440, 390, 320]) {
+            await page.setViewport({ width, height: 900 });
+            assert.equal(await page.$$eval('.repeat-row [data-add-range]', buttons => buttons.every(button => button.hidden)), true);
+            assert.equal(await page.$$eval('.repeat-row', rows => rows.every(row => row.getBoundingClientRect().height <= 54)), true);
+            assert.equal(await page.$eval('#repeat-list', el => el.scrollHeight > el.clientHeight), false);
+            await (await page.$('#repeat-dialog')).screenshot({ path: path.join(root, 'artifacts', `repeat-layout-empty-${width}.png`) });
+        }
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.focus(`${editor} input[type="checkbox"]`);
+        await page.keyboard.press('Space');
+        assert.equal(await page.$eval(`${editor} [data-add-range]`, el => el.hidden), false);
+        assert.equal(await page.$eval(`${editor} [data-remove-range]`, el => el.hidden), true);
+        assert.equal(await page.$eval('#repeat-selection-count', el => el.textContent), '1일 선택');
+        await page.keyboard.press('Space');
+        phase = 'multiple recurring ranges';
         await click(`${editor} input[type="checkbox"]`);
         await click(`${editor} .range-start`);
         await page.keyboard.type('8');
@@ -143,6 +159,11 @@ async function main() {
         await editRange(editor, 1, '1200', '1500');
         await click(`${editor} [data-add-range]`);
         await editRange(editor, 2, '1600', '1800');
+        const savedInputs = await page.$$eval(`${editor} .time-input`, inputs => inputs.map(input => input.value.replace(':', '')));
+        await click(`${editor} input[type="checkbox"]`);
+        assert.equal(await page.$eval(`${editor} [data-range-list]`, el => el.hidden), true);
+        await click(`${editor} input[type="checkbox"]`);
+        assert.deepEqual(await page.$$eval(`${editor} .time-input`, inputs => inputs.map(input => input.value.replace(':', ''))), savedInputs);
         const repeatLayouts = [];
         for (const width of [1440, 1024, 768, 560, 430, 390, 320]) {
             await page.setViewport({ width, height: 900 });
