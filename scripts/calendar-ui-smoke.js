@@ -120,6 +120,10 @@ async function main() {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
         await page.screenshot({ path: path.join(artifacts, 'help-mobile.png') });
         await page.setViewport({ width: 320, height: 740 });
+        await page.waitForFunction(() => {
+            const rect = document.querySelector('#help-dialog').getBoundingClientRect();
+            return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight;
+        });
         assert.equal(await page.$eval('#help-dialog', el => { const rect = el.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight; }), true);
         await page.click('[data-close-dialog="help-dialog"]');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -199,7 +203,10 @@ async function main() {
         await page.click('[data-portal-action="update"]');
         await page.waitForSelector('#portal-record-dialog[open]');
         assert.equal(await page.$eval('#portal-record-submit', el => el.disabled), true);
-        await page.$eval('#portal-record-end', el => { el.value = '15:00'; });
+        await page.click('#portal-record-end');
+        await page.keyboard.type('15');
+        await page.keyboard.press('Tab');
+        assert.equal(await page.$eval('#portal-record-end', el => el.value), '15:00');
         await page.$eval('#portal-record-content', el => { el.value = '<img src=x onerror=alert(1)>'; });
         await page.click('#portal-record-confirm');
         await page.click('#portal-record-submit');
@@ -235,7 +242,7 @@ async function main() {
         await page.$eval('#day-start', el => { el.value = '10:00'; });
         await page.$eval('#day-end', el => { el.value = '12:00'; });
         await applyDay();
-        assert.equal(await page.$eval('[data-day="1"]', el => el.draggable), true);
+        assert.equal(await page.$eval('[data-day="1"]', el => el.draggable), false);
         assert.equal(await page.$('.day-copy-hint'), null);
         assert.equal(await page.$eval('#calendar', el => el.textContent.includes('끌어 복사')), false);
         assert.equal(await page.$eval('[data-day="6"]', el => el.draggable), false);

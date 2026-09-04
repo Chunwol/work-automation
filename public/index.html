@@ -253,7 +253,7 @@
                 <summary>일정 추가·복사·삭제</summary>
                 <ul>
                     <li>날짜를 누르고 출퇴근 시간을 적용하면 수동 예정 일정이 생깁니다. <strong>구간 추가</strong>로 점심시간 전후처럼 하루 1~8개 구간을 나눌 수 있습니다. 구간 사이의 시간은 합계에서 제외합니다.</li>
-                    <li>시간은 오전/오후 없는 24시간제입니다. <strong>0900</strong> 또는 <strong>09:00</strong>으로 입력하고, 퇴근은 <strong>24:00</strong>까지 사용할 수 있습니다.</li>
+                    <li>시간칸을 누르면 기존 값이 선택됩니다. <strong>9 → 09:00</strong>, <strong>930 → 09:30</strong>처럼 짧게 입력할 수 있으며, 퇴근은 <strong>24:00</strong>까지 가능합니다.</li>
                     <li>수동 예정 일정을 같은 월의 빈 날짜로 드래그하면 바로 시간을 복사합니다. 원본은 유지합니다.</li>
                     <li>모바일·키보드에서는 날짜 상세창의 <strong>복사할 날짜</strong>와 <strong>일정 복사</strong>를 사용하세요.</li>
                     <li>공휴일·추가 지정 휴일이거나 기존 예정 일정·포털 기록이 있는 날짜에만 확인 모달을 표시합니다. 같은 시간의 예정 일정이 이미 있으면 아무것도 바꾸지 않습니다. 근무내용과 배정은 현재 월의 공통 설정을 사용합니다.</li>
@@ -334,9 +334,9 @@
             <div id="portal-record-summary" class="day-portal-record"></div>
             <div id="portal-record-edit-fields">
                 <div class="time-row">
-                    <label class="field"><span>출근</span><input id="portal-record-start" class="time-input" type="text" inputmode="numeric" maxlength="5" placeholder="09:00" pattern="([01][0-9]|2[0-3]):?[0-5][0-9]" aria-label="출근 시간, 24시간제" required></label>
+                    <label class="field"><span>출근</span><input id="portal-record-start" class="time-input" type="text" inputmode="numeric" maxlength="5" placeholder="09:00" pattern="([01]?[0-9]|2[0-3])(:?[0-5][0-9])?" aria-label="출근 시간, 24시간제" required></label>
                     <span>→</span>
-                    <label class="field"><span>퇴근</span><input id="portal-record-end" class="time-input" type="text" inputmode="numeric" maxlength="5" placeholder="17:00" pattern="(([01][0-9]|2[0-3]):?[0-5][0-9]|24:?00)" aria-label="퇴근 시간, 24시간제" required></label>
+                    <label class="field"><span>퇴근</span><input id="portal-record-end" class="time-input" type="text" inputmode="numeric" maxlength="5" placeholder="17:00" pattern="(([01]?[0-9]|2[0-3])(:?[0-5][0-9])?|24(:?00)?)" aria-label="퇴근 시간, 24시간제" required></label>
                 </div>
                 <label class="field"><span>근무내용 · 100바이트 이내</span><textarea id="portal-record-content" maxlength="100" rows="3" required></textarea></label>
             </div>

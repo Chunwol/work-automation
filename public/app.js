@@ -242,7 +242,11 @@ function inputTime(value) {
 }
 
 function compactTime(value) {
-    return String(value || '').trim().replace(':', '');
+    const text = String(value || '').trim();
+    if (/^\d{1,2}$/.test(text)) return text.padStart(2, '0') + '00';
+    if (/^\d{3}$/.test(text)) return text.padStart(4, '0');
+    if (/^\d{1,2}:\d{2}$/.test(text)) return text.replace(':', '').padStart(4, '0');
+    return text.replace(':', '');
 }
 
 const asRanges = value => Array.isArray(value) ? value : value ? [value] : [];
@@ -341,7 +345,7 @@ function renderCalendar() {
         if (canCopy) classes.push('copyable-day');
         if (today.getFullYear() === state.year && today.getMonth() + 1 === state.month && today.getDate() === day) classes.push('today');
         html += `
-            <button class="${classes.join(' ')}" type="button" data-day="${day}" draggable="${canCopy}" aria-label="${state.month}월 ${day}일, 포털 기록 ${records.length}건, 일정 설정${canCopy ? ', 수동 예정 일정 드래그 복사 가능' : ''}">
+            <button class="${classes.join(' ')}" type="button" data-day="${day}" draggable="${canCopy && !window.PointerEvent}" aria-label="${state.month}월 ${day}일, 포털 기록 ${records.length}건, 일정 설정${canCopy ? ', 수동 예정 일정 드래그 복사 가능' : ''}">
                 <span class="date-number">${day}</span>
                 ${isHoliday ? `<span class="holiday-label" title="${escapeHtml(holiday?.name || '공휴일')}">${holidayWorked ? '근무 예외' : escapeHtml(holiday?.name || '공휴일')}</span>` : ''}
                 ${value && !entry.excluded && !sameAsDraft ? `${missingRanges.slice(0, 3).map(range => `<span class="day-time"><span>${escapeHtml(displayTime(range.start))}</span><span class="time-divider">–</span><span>${escapeHtml(displayTime(range.end))}</span></span>`).join('')}${missingRanges.length > 3 ? `<span class="portal-more">+${missingRanges.length - 3}구간</span>` : ''}<span class="day-hours">예정 ${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ''}</span>` : ''}
@@ -385,7 +389,7 @@ function bindCalendarDay(button) {
     button.addEventListener('click', () => {
         if (Date.now() >= state.suppressDayClickUntil) openDayDialog(day);
     });
-    // Embedded browsers do not consistently deliver native HTML drag/drop.
+    // Use one drag system per browser; native drag can cancel a pointer gesture.
     button.addEventListener('pointerdown', event => {
         if (event.button !== 0 || event.pointerType === 'touch' || event.isPrimary === false) return;
         const source = manualCopySource(day);
@@ -661,7 +665,7 @@ function renderRangeEditor(editor, ranges) {
     $('[data-range-list]', editor).innerHTML = ranges.map((range, index) => {
         const input = (side, name) => {
             const id = kind === 'day' && index === 0 ? `id="day-${side}"` : '';
-            const pattern = side === 'end' ? '(([01][0-9]|2[0-3]):?[0-5][0-9]|24:?00)' : '([01][0-9]|2[0-3]):?[0-5][0-9]';
+            const pattern = side === 'end' ? '(([01]?[0-9]|2[0-3])(:?[0-5][0-9])?|24(:?00)?)' : '([01]?[0-9]|2[0-3])(:?[0-5][0-9])?';
             const value = timeToMinutes(range[side]) === null ? range[side] : displayTime(range[side]);
             return `<label class="field repeat-time-field"><span>${name}</span><input ${id} class="range-${side} ${kind}-${side} time-input" type="text" inputmode="numeric" maxlength="5" pattern="${pattern}" value="${escapeHtml(value)}" placeholder="${side === 'start' ? '09:00' : '17:00'}" aria-label="${label} ${index + 1}구간 ${name}, 24시간제" required></label>`;
         };
@@ -1182,8 +1186,25 @@ async function createUser(event) {
 }
 
 function bindEvents() {
+    let selectTimeOnClick = null;
+    document.addEventListener('pointerdown', event => {
+        selectTimeOnClick = event.target.matches('.time-input') && document.activeElement !== event.target ? event.target : null;
+    });
+    document.addEventListener('focusin', event => {
+        if (event.target.matches('.time-input')) event.target.select();
+    });
+    document.addEventListener('click', event => {
+        if (selectTimeOnClick === event.target) event.target.select();
+        selectTimeOnClick = null;
+    });
     window.addEventListener('blur', clearScheduleDrag);
     document.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.isComposing && event.target.matches('.time-input')) {
+            event.preventDefault();
+            const form = event.target.form;
+            if (['day-form', 'repeat-form'].includes(form?.id)) form.requestSubmit($('button[type="submit"]', form));
+            else if (form?.id === 'portal-record-form') $('#portal-record-confirm').focus();
+        }
         if (event.key === 'Escape' && state.pointerSchedule?.active) {
             state.suppressDayClickUntil = Date.now() + 400;
             clearScheduleDrag();
@@ -1191,6 +1212,7 @@ function bindEvents() {
     });
     document.addEventListener('focusout', event => {
         if (!event.target.matches('.time-input')) return;
+        selectTimeOnClick = null;
         const digits = compactTime(event.target.value);
         if (timeToMinutes(digits) !== null) event.target.value = displayTime(digits);
     });

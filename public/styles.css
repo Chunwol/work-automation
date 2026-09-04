@@ -334,7 +334,8 @@ input, select, textarea { accent-color: var(--blue); }
     transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 .calendar-day:hover { z-index: 1; border-color: #a9befb; background: #f6f8ff; }
-.calendar-day.copyable-day { cursor: grab; }
+.calendar-day.copyable-day { cursor: grab; user-select: none; }
+.calendar-day.copyable-day[draggable="false"] { -webkit-user-drag: none; }
 .calendar-day.drag-source { opacity: .5; cursor: grabbing; }
 .calendar-day.drag-target { outline: 2px solid var(--green); outline-offset: -3px; background: var(--green-soft); transform: none; }
 .day-copy-fields { display: flex; align-items: end; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }

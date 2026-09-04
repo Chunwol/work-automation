@@ -59,6 +59,20 @@ async function main() {
         await page.waitForSelector('[data-day="1"]');
         phase = 'three intervals and 24-hour inputs';
         await click('[data-day="1"]');
+        await click('#day-start');
+        assert.deepEqual(await page.$eval('#day-start', el => [el.selectionStart, el.selectionEnd]), [0, 5]);
+        await page.keyboard.type('930');
+        await page.keyboard.press('Tab');
+        assert.equal(await page.$eval('#day-start', el => el.value), '09:30');
+        await page.keyboard.type('12');
+        await page.keyboard.press('Tab');
+        assert.equal(await page.$eval('#day-end', el => el.value), '12:00');
+        await click('#day-start');
+        await page.keyboard.type('9');
+        await page.keyboard.press('Enter');
+        await page.waitForSelector('#day-dialog:not([open])');
+        assert.match(await page.$eval('[data-day="1"]', el => el.textContent), /09:00/);
+        await click('[data-day="1"]');
         await editRange('#day-range-editor', 0, '0900', '1200');
         await click('#day-range-editor [data-add-range]');
         await editRange('#day-range-editor', 1, '1300', '1600');
@@ -115,7 +129,13 @@ async function main() {
         const editor = `[data-repeat-day="${weekday}"]`;
         await click('#repeat-settings-button');
         await click(`${editor} input[type="checkbox"]`);
-        await editRange(editor, 0, '0800', '1100');
+        await click(`${editor} .range-start`);
+        await page.keyboard.type('8');
+        await page.keyboard.press('Tab');
+        await page.keyboard.type('11');
+        await page.keyboard.press('Tab');
+        assert.equal(await page.$eval(`${editor} .range-start`, el => el.value), '08:00');
+        assert.equal(await page.$eval(`${editor} .range-end`, el => el.value), '11:00');
         await click(`${editor} [data-add-range]`);
         await editRange(editor, 1, '1200', '1500');
         await click(`${editor} [data-add-range]`);
@@ -139,6 +159,7 @@ async function main() {
         assert.equal(schedule.vacationDates.includes(3), true);
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ ok: true, splitShifts: true, midnightEnd: true, overlapBlocked: true,
+            replaceTimeWithoutClearing: true, shortTimeInput: true, enterSubmitsShortTime: true,
             realMouseDragCopiesAllRanges: true, manualDeleteRestoresEmptyDate: true, recurringDeleteExcludesOnlyDate: true,
             savedAndReloaded: true, mobileWidths: [320, 390, 768, 1440], realPortalWrites: 0 }));
     } catch (error) {
