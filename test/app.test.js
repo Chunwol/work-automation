@@ -31,6 +31,25 @@ const sessionMaxAge = (response) => {
     return Number(/Max-Age=(\d+)/i.exec(cookie || '')?.[1] ?? NaN);
 };
 
+test('a new month inherits the most recent work content, but not from a later month', async t => {
+    const runtime = createApp(testConfig());
+    t.after(() => runtime.db.close());
+    const agent = request.agent(runtime.app);
+    const signup = await agent.post('/api/signup')
+        .send({ username: 'planner', displayName: 'P', password: 'password-123456', passwordConfirmation: 'password-123456' });
+    assert.equal(signup.status, 201);
+    const userId = signup.body.user.id;
+    runtime.db.saveSchedule(userId, { year: 2026, month: 9, content: '실습실 점검', portalAssignment: null,
+        regularRules: [], specialDates: {}, vacationDates: [], extraHolidayDates: [], holidayDates: [], holidayWorkDates: [], cleanupUnexpectedRows: false });
+
+    const october = await agent.get('/api/schedules/2026/10');
+    assert.equal(october.status, 200);
+    assert.equal(october.body.schedule.content, '실습실 점검', 'a later unsaved month inherits the recent content');
+
+    const august = await agent.get('/api/schedules/2026/8');
+    assert.equal(august.body.schedule.content, '', 'an earlier month must not inherit from a later one');
+});
+
 test('자동 로그인 keeps the session far longer, and a normal login stays short-lived', async t => {
     const runtime = createApp(testConfig());
     t.after(() => runtime.db.close());

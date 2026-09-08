@@ -250,6 +250,7 @@ function createDatabase(databasePath) {
         deleteCredential: db.prepare('DELETE FROM portal_credentials WHERE user_id = ?'),
         getSchedule: db.prepare('SELECT * FROM schedules WHERE user_id = ? AND year = ? AND month = ?'),
         getRecurringRules: db.prepare('SELECT * FROM recurring_rules WHERE user_id = ? AND effective_month <= ? ORDER BY effective_month DESC LIMIT 1'),
+        latestContent: db.prepare("SELECT content FROM schedules WHERE user_id = ? AND (year * 100 + month) <= ? AND content <> '' ORDER BY year * 100 + month DESC LIMIT 1"),
         saveRecurringRules: db.prepare(`
             INSERT INTO recurring_rules (user_id, effective_month, rules_json, updated_at) VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id, effective_month) DO UPDATE SET
@@ -492,6 +493,8 @@ function createDatabase(databasePath) {
         listDueMonthlyAutomations: now => statements.dueMonthlyAutomations.all(now).map(row => monthlySettings(row)),
         getSchedule,
         getRecurringRules,
+        // The most recent non-empty work content at or before the given month, for prefilling a new month.
+        getLatestContent: (userId, year, month) => statements.latestContent.get(userId, year * 100 + month)?.content || '',
         saveSchedule,
         createSession({ tokenHash, userId, csrfToken, expiresAt }) {
             statements.createSession.run({ tokenHash, userId, csrfToken, createdAt: nowIso(), expiresAt });

@@ -632,7 +632,8 @@ function createApp(config, overrides = {}) {
         const schedule = db.getSchedule(req.auth.user.id, year, month) || {
             year,
             month,
-            content: '',
+            // Work content rarely changes month to month, so a new month inherits the most recent entry.
+            content: db.getLatestContent(req.auth.user.id, year, month),
             portalAssignment: null,
             ...db.getRecurringRules(req.auth.user.id, year, month),
             specialDates: {},
