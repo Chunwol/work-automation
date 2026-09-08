@@ -187,6 +187,9 @@ input, select, textarea { accent-color: var(--blue); }
 .login-options { display: flex; gap: 18px; flex-wrap: wrap; margin: -4px 2px 2px; }
 .login-option { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink-soft); font-size: .82rem; font-weight: 700; }
 .login-option input { width: 17px; height: 17px; accent-color: var(--blue); }
+.recover-link { display: block; margin-top: 14px; }
+.recover-intro { font-size: .8rem; margin: 0 0 14px; }
+.recover-warning { color: var(--red); font-size: .74rem; margin: 6px 2px 0; line-height: 1.4; }
 .field { display: grid; gap: 8px; }
 .field > span:first-child { color: var(--ink-soft); font-size: .78rem; font-weight: 800; }
 .field input, .field textarea, .field select {

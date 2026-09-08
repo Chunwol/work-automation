@@ -173,6 +173,9 @@ function createApp(config, overrides = {}) {
     const jobLimiter = createFixedWindowLimiter({ windowMs: 60 * 1000, limit: 5 });
     const credentialLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 5 });
     const credentialIpLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 10 });
+    const recoveryLimiter = createFixedWindowLimiter({ windowMs: 15 * 60 * 1000, limit: 6 });
+    // Every live-portal attempt counts toward the school's own 5-per-hour lockout, so cap it well below.
+    const recoveryLiveLimiter = createFixedWindowLimiter({ windowMs: 60 * 60 * 1000, limit: 3 });
 
     if (config.trustProxy) app.set('trust proxy', 1);
     app.disable('x-powered-by');
@@ -376,6 +379,78 @@ function createApp(config, overrides = {}) {
             const csrfToken = startSession(res, userRow.id, req.body?.remember === true);
             db.addAudit(userRow.id, 'login_succeeded', { remember: req.body?.remember === true }, req.ip);
             return res.json({ user: db.getPublicUser(userRow.id), csrfToken, portalCredential: credentialSummary(userRow.id) });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    // Recover a forgotten app account using the school portal credentials it is linked to.
+    // Verifies against the stored portal password first (no school-site login, so it cannot
+    // trip the portal's own lockout); only falls back to a live portal login when asked.
+    app.post('/api/recover', async (req, res, next) => {
+        try {
+            const ipRate = recoveryLimiter(req.ip);
+            if (!ipRate.allowed) {
+                res.setHeader('Retry-After', ipRate.retryAfter);
+                return res.status(429).json({ error: '계정 찾기 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.' });
+            }
+            const portalId = String(req.body?.portalId || '').trim();
+            const portalPassword = String(req.body?.portalPassword || '').trim();
+            const newPassword = String(req.body?.newPassword || '');
+            const username = String(req.body?.username || '').trim();
+            const useLivePortal = req.body?.useLivePortal === true;
+            if (portalId.length < 2 || portalPassword.length < 1) {
+                return res.status(400).json({ error: '포털 아이디와 비밀번호를 입력해주세요.' });
+            }
+            if (newPassword.length < 10 || newPassword.length > 128) {
+                return res.status(400).json({ error: '새 비밀번호는 10~128자로 입력해주세요.' });
+            }
+            const matches = [];
+            for (const credential of db.listPortalCredentials()) {
+                let storedId;
+                try { storedId = decryptSecret(credential.portal_id_encrypted, config.masterKey, `portal:${credential.user_id}:id`); }
+                catch { continue; }
+                if (storedId.trim().toLowerCase() === portalId.toLowerCase()) matches.push(credential);
+            }
+            const candidates = username
+                ? matches.filter((credential) => db.getPublicUser(credential.user_id)?.username.toLowerCase() === username.toLowerCase())
+                : matches;
+            if (candidates.length === 0) {
+                return res.status(404).json({ error: '이 포털 아이디로 연결된 계정을 찾지 못했습니다. 포털 아이디를 확인하거나 관리자에게 문의해주세요.' });
+            }
+            if (candidates.length > 1) {
+                return res.status(409).json({ code: 'AMBIGUOUS', error: '이 포털 아이디에 연결된 계정이 여러 개입니다. 앱 사용자명도 함께 입력해주세요.' });
+            }
+            const credential = candidates[0];
+            const userId = credential.user_id;
+            let liveUsed = false;
+            let verified = false;
+            try { verified = decryptSecret(credential.portal_password_encrypted, config.masterKey, `portal:${userId}:password`) === portalPassword; }
+            catch { verified = false; }
+            if (!verified) {
+                if (!useLivePortal) {
+                    return res.status(401).json({ code: 'STORED_MISMATCH',
+                        error: '저장된 포털 비밀번호와 다릅니다. 포털 비밀번호를 바꾸셨다면 아래 “학교 로그인으로 확인”을 사용해주세요.' });
+                }
+                const liveRate = recoveryLiveLimiter(req.ip);
+                if (!liveRate.allowed) {
+                    res.setHeader('Retry-After', liveRate.retryAfter);
+                    return res.status(429).json({ error: '학교 로그인 확인 시도가 너무 많습니다. 학교 사이트 잠금(5회/1시간)을 피하려면 잠시 후 다시 시도해주세요.' });
+                }
+                liveUsed = true;
+                try { verified = await runtime.verifyCredentials({ portalId, portalPassword }) === true; }
+                catch { verified = false; }
+                if (!verified) {
+                    logError('account-recovery', withoutSecrets(new Error('live portal verification failed'), [portalPassword, portalId]), { userId });
+                    db.addAudit(userId, 'account_recovery_failed', { live: true }, req.ip);
+                    return res.status(401).json({ error: '학교 포털 로그인 확인에 실패했습니다. 포털 비밀번호를 확인해주세요. 학교 사이트는 5회 실패 시 1시간 잠깁니다.' });
+                }
+            }
+            db.updatePassword(userId, await hashPassword(newPassword));
+            await runtime.portalSessions.invalidateUser(userId);
+            db.addAudit(userId, 'account_recovery_via_portal', { method: liveUsed ? 'live' : 'stored' }, req.ip);
+            const user = db.getPublicUser(userId);
+            return res.json({ username: user.username, displayName: user.displayName });
         } catch (error) {
             next(error);
         }

@@ -82,6 +82,7 @@
                     <button id="auth-submit" class="button button-primary button-wide" type="submit">로그인</button>
                 </form>
                 <p id="setup-hint" class="auth-hint" hidden>첫 계정은 관리자 계정으로 생성됩니다. 비밀번호는 10자 이상 사용해주세요.</p>
+                <button id="recover-open" type="button" class="text-button recover-link" hidden>아이디·비밀번호를 잊으셨나요? 포털로 찾기</button>
                 <button id="admin-setup-button" type="button" class="text-button admin-setup-link" hidden>서버 관리자 초기 설정</button>
             </div>
         </section>
@@ -469,6 +470,21 @@
             <label class="field"><span>새 비밀번호</span><input id="new-password" type="password" autocomplete="new-password" minlength="10" required></label>
             <p id="password-error" class="form-error" hidden></p>
             <div class="modal-actions"><button class="button button-quiet" value="cancel">취소</button><button class="button button-primary" type="submit" value="default">변경</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="recover-dialog" class="modal small-modal">
+        <form id="recover-form" method="dialog">
+            <div class="modal-header"><div><p class="panel-kicker">ACCOUNT RECOVERY</p><h2>포털로 계정 찾기</h2></div><button class="modal-close" value="cancel" aria-label="닫기">×</button></div>
+            <p class="muted recover-intro">앱 아이디·비밀번호를 잊었어도 학교 포털 아이디·비밀번호로 계정을 찾고 새 비밀번호를 정할 수 있습니다.</p>
+            <label class="field"><span>포털 아이디</span><input id="recover-portal-id" autocomplete="off" maxlength="80" required></label>
+            <label class="field"><span>포털 비밀번호</span><input id="recover-portal-password" type="password" autocomplete="off" maxlength="200" required></label>
+            <label class="field"><span>새 앱 비밀번호</span><input id="recover-new-password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+            <label class="field" id="recover-username-field" hidden><span>앱 사용자명(계정이 여러 개일 때만)</span><input id="recover-username" autocomplete="off" maxlength="32"></label>
+            <label class="login-option" id="recover-live-field" hidden><input id="recover-live" type="checkbox"><span>학교 로그인으로 확인 (포털 비밀번호를 바꾼 경우)</span></label>
+            <p id="recover-live-warning" class="recover-warning" hidden>주의: 포털 비밀번호를 틀리면 학교 사이트가 5회 실패 후 1시간 잠길 수 있습니다. 정확히 입력하세요.</p>
+            <p id="recover-error" class="form-error" hidden></p>
+            <div class="modal-actions"><button class="button button-quiet" value="cancel">취소</button><button class="button button-primary" type="submit" value="default">계정 찾기</button></div>
         </form>
     </dialog>
 

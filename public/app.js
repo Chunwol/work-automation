@@ -176,6 +176,7 @@ async function api(path, options = {}) {
     if (!response.ok) {
         const error = new Error(payload.error || `요청 실패 (${response.status})`);
         error.status = response.status;
+        error.code = payload.code;
         error.payload = payload;
         throw error;
     }
@@ -213,6 +214,47 @@ function persistUsername(username) {
     } catch { /* private mode or storage disabled: skip silently */ }
 }
 
+function openRecoverDialog() {
+    $('#recover-form').reset();
+    $('#recover-username-field').hidden = true;
+    $('#recover-live-field').hidden = true;
+    $('#recover-live-warning').hidden = true;
+    showError($('#recover-error'), '');
+    const saved = readSavedUsername();
+    if (saved) $('#recover-username').value = saved;
+    $('#recover-dialog').showModal();
+}
+
+async function handleRecover(event) {
+    event.preventDefault();
+    if (event.submitter?.value === 'cancel') return $('#recover-dialog').close();
+    showError($('#recover-error'), '');
+    const button = $('#recover-form button[type="submit"]');
+    setButtonBusy(button, true, '확인 중...');
+    try {
+        const body = {
+            portalId: $('#recover-portal-id').value.trim(),
+            portalPassword: $('#recover-portal-password').value.trim(),
+            newPassword: $('#recover-new-password').value,
+            username: $('#recover-username').value.trim(),
+            useLivePortal: $('#recover-live').checked
+        };
+        const data = await api('/api/recover', { method: 'POST', body });
+        $('#recover-dialog').close();
+        // Reveal the recovered account name and prefill it for the next login.
+        $('#username').value = data.username;
+        $('#remember-username').checked = true;
+        persistUsername(data.username);
+        toast(`계정을 찾았습니다: ${data.displayName} (${data.username}). 새 비밀번호로 로그인해주세요.`, 'success');
+    } catch (error) {
+        if (error.code === 'AMBIGUOUS') $('#recover-username-field').hidden = false;
+        if (error.code === 'STORED_MISMATCH') { $('#recover-live-field').hidden = false; $('#recover-live-warning').hidden = false; }
+        showError($('#recover-error'), error.message);
+    } finally {
+        setButtonBusy(button, false);
+    }
+}
+
 function showAuthView(setupRequired, setupTokenRequired = false, mode = 'login') {
     state.setupRequired = setupRequired;
     state.setupTokenRequired = setupTokenRequired;
@@ -227,6 +269,7 @@ function showAuthView(setupRequired, setupTokenRequired = false, mode = 'login')
     $('#setup-hint').hidden = !isSetup && !isSignup;
     $('#setup-hint').textContent = isSetup ? '서버 운영자를 위한 관리자 설정입니다. 비밀번호는 10자 이상 사용해주세요.' : '회원가입 후 학교 포털 계정을 별도로 연결합니다. 비밀번호는 10자 이상 사용해주세요.';
     $('#login-options').hidden = state.authMode !== 'login';
+    $('#recover-open').hidden = state.authMode !== 'login';
     if (state.authMode === 'login') applySavedUsername();
     $('#admin-setup-button').hidden = !setupRequired || isSetup;
     $('#login-tab').setAttribute('aria-pressed', String(state.authMode === 'login'));
@@ -1904,6 +1947,8 @@ function bindEvents() {
         $('#password-dialog').showModal();
     });
     $('#password-form').addEventListener('submit', changePassword);
+    $('#recover-open').addEventListener('click', openRecoverDialog);
+    $('#recover-form').addEventListener('submit', handleRecover);
 
     $('#admin-button').addEventListener('click', openAdminDialog);
     $('#admin-menu-button').addEventListener('click', () => {

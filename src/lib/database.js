@@ -246,6 +246,7 @@ function createDatabase(databasePath) {
                 updated_at = excluded.updated_at
         `),
         getCredential: db.prepare('SELECT * FROM portal_credentials WHERE user_id = ?'),
+        listCredentials: db.prepare('SELECT * FROM portal_credentials'),
         deleteCredential: db.prepare('DELETE FROM portal_credentials WHERE user_id = ?'),
         getSchedule: db.prepare('SELECT * FROM schedules WHERE user_id = ? AND year = ? AND month = ?'),
         getRecurringRules: db.prepare('SELECT * FROM recurring_rules WHERE user_id = ? AND effective_month <= ? ORDER BY effective_month DESC LIMIT 1'),
@@ -474,6 +475,7 @@ function createDatabase(databasePath) {
             statements.disableMonthlyAutomation.run(nowIso(), userId);
         }),
         getPortalCredential: (userId) => statements.getCredential.get(userId) || null,
+        listPortalCredentials: () => statements.listCredentials.all(),
         deletePortalCredential: db.transaction(userId => {
             statements.disableMonthlyAutomation.run(nowIso(), userId);
             return statements.deleteCredential.run(userId).changes > 0;

@@ -100,6 +100,45 @@ test('surrounding whitespace pasted into the id or password is stripped before v
     assert.equal(decryptSecret(stored.portal_password_encrypted, runtime.masterKey, `portal:${id}:password`), 'dahyun233812!');
 });
 
+test('portal-based recovery resets the app password without a live login when the stored one matches', async t => {
+    let liveCalls = 0;
+    const runtime = setup(t, async () => { liveCalls += 1; return true; });
+    const { agent, csrf } = await signup(runtime, 'forgetful');
+    await agent.put('/api/portal-credentials').set('X-CSRF-Token', csrf)
+        .send({ portalId: 'chae042740', portalPassword: 'portal-pass-1' });
+    const afterSave = liveCalls;
+
+    // Stored portal password matches → no school-site login, account recovered.
+    const recovered = await request(runtime.app).post('/api/recover')
+        .send({ portalId: '  chae042740 ', portalPassword: 'portal-pass-1', newPassword: 'brand-new-pass-1' });
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.body.username, 'forgetful');
+    assert.equal(liveCalls, afterSave, 'stored-password match must not trigger a live portal login');
+
+    // The new app password works.
+    const login = await request(runtime.app).post('/api/login').send({ username: 'forgetful', password: 'brand-new-pass-1' });
+    assert.equal(login.status, 200);
+
+    // A wrong stored password refuses and offers the live path, without contacting the portal.
+    const mismatch = await request(runtime.app).post('/api/recover')
+        .send({ portalId: 'chae042740', portalPassword: 'not-the-stored-one', newPassword: 'irrelevant-pass-1' });
+    assert.equal(mismatch.status, 401);
+    assert.equal(mismatch.body.code, 'STORED_MISMATCH');
+    assert.equal(liveCalls, afterSave);
+
+    // With the live option, a successful portal login authorizes the reset.
+    const live = await request(runtime.app).post('/api/recover')
+        .send({ portalId: 'chae042740', portalPassword: 'current-portal-pass', newPassword: 'lived-new-pass-1', useLivePortal: true });
+    assert.equal(live.status, 200);
+    assert.equal(liveCalls, afterSave + 1);
+
+    // An unknown portal id reveals nothing and never logs in.
+    const unknown = await request(runtime.app).post('/api/recover')
+        .send({ portalId: 'nobody999', portalPassword: 'x', newPassword: 'whatever-pass-1' });
+    assert.equal(unknown.status, 404);
+    assert.equal(liveCalls, afterSave + 1);
+});
+
 test('pending verification prevents duplicate save/delete/jobs and cannot save after logout', async t => {
     let resolve;
     let entered;
