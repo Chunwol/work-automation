@@ -190,6 +190,9 @@ input, select, textarea { accent-color: var(--blue); }
 .recover-link { display: block; margin-top: 14px; }
 .recover-intro { font-size: .8rem; margin: 0 0 14px; }
 .recover-warning { color: var(--red); font-size: .74rem; margin: 6px 2px 0; line-height: 1.4; }
+.bulk-clear-range { display: flex; align-items: flex-end; gap: 10px; }
+.bulk-clear-range .field { flex: 1; min-width: 0; margin: 0; }
+.bulk-clear-dash { padding-bottom: 10px; color: var(--ink-soft); font-weight: 800; }
 .field { display: grid; gap: 8px; }
 .field > span:first-child { color: var(--ink-soft); font-size: .78rem; font-weight: 800; }
 .field input, .field textarea, .field select {

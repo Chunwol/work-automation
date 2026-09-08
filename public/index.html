@@ -156,6 +156,7 @@
                         <div class="panel-actions">
                             <button id="previous-month-button" class="button button-quiet" type="button">이전 달 가져오기</button>
                             <button id="repeat-settings-button" class="button button-quiet" type="button">요일 반복 설정</button>
+                            <button id="bulk-clear-button" class="button button-quiet" type="button">여러 날 삭제</button>
                             <button id="save-schedule-button" class="button button-primary" type="button">일정 저장</button>
                         </div>
                     </div>
@@ -371,6 +372,21 @@
             <label class="check-field"><input id="portal-record-confirm" type="checkbox"><span>대상 일지와 실제 변경 내용을 확인했습니다.</span></label>
             <p id="portal-record-error" class="form-error" role="alert" hidden></p>
             <div class="modal-actions"><button class="button button-quiet" value="cancel" formnovalidate>취소</button><button id="portal-record-submit" class="button button-accent" type="submit" disabled>포털 일지 수정</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="bulk-clear-dialog" class="modal small-modal">
+        <form id="bulk-clear-form" method="dialog">
+            <div class="modal-header"><div><p class="panel-kicker">CLEAR RANGE</p><h2>여러 날 예정 일정 삭제</h2></div><button class="modal-close" value="cancel" aria-label="닫기">×</button></div>
+            <p class="muted recover-intro">시작일부터 종료일까지 예정 일정(수동·요일 반복)을 한 번에 지웁니다. 포털에 등록된 기록은 지우지 않습니다.</p>
+            <div class="bulk-clear-range">
+                <label class="field"><span>시작일</span><input id="bulk-clear-from" type="number" min="1" max="31" inputmode="numeric" required></label>
+                <span class="bulk-clear-dash">~</span>
+                <label class="field"><span>종료일</span><input id="bulk-clear-to" type="number" min="1" max="31" inputmode="numeric" required></label>
+            </div>
+            <p id="bulk-clear-info" class="muted" role="status"></p>
+            <p id="bulk-clear-error" class="form-error" hidden></p>
+            <div class="modal-actions"><button class="button button-quiet" value="cancel">취소</button><button id="bulk-clear-submit" class="button button-destructive" type="submit" value="default">예정 일정 삭제</button></div>
         </form>
     </dialog>
 

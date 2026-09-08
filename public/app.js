@@ -542,7 +542,8 @@ function renderCalendar() {
         const holiday = state.calendar.holidays.find((item) => item.day === day);
         const isHoliday = (state.schedule?.holidayDates || []).includes(day);
         const holidayWorked = (state.schedule?.holidayWorkDates || []).includes(day);
-        const canCopy = Boolean(entry?.specific && !entry.excluded && minutes > 0);
+        // Any day that shows a work time can be copied — from a manual entry or a weekday-repeat rule.
+        const canCopy = Boolean(entry && !entry.excluded && minutes > 0);
         if (weekday === 0 || (isHoliday && !holidayWorked)) classes.push('red-day');
         if (weekday === 6) classes.push('saturday');
         if (isHoliday && !holidayWorked) classes.push('holiday-day');
@@ -553,7 +554,7 @@ function renderCalendar() {
         if (canCopy) classes.push('copyable-day');
         if (today.getFullYear() === state.year && today.getMonth() + 1 === state.month && today.getDate() === day) classes.push('today');
         html += `
-            <button class="${classes.join(' ')}" type="button" data-day="${day}" draggable="${canCopy && !window.PointerEvent}" aria-label="${state.month}월 ${day}일, 포털 기록 ${records.length}건, 일정 설정${canCopy ? ', 수동 예정 일정 드래그 복사 가능' : ''}">
+            <button class="${classes.join(' ')}" type="button" data-day="${day}" draggable="${canCopy && !window.PointerEvent}" aria-label="${state.month}월 ${day}일, 포털 기록 ${records.length}건, 일정 설정${canCopy ? ', 예정 일정 드래그 복사 가능' : ''}">
                 <span class="date-number">${day}</span>
                 ${isHoliday ? `<span class="holiday-label" title="${escapeHtml(holiday?.name || '공휴일')}">${holidayWorked ? '근무 예외' : escapeHtml(holiday?.name || '공휴일')}</span>` : ''}
                 ${value && !entry.excluded && !sameAsDraft ? `${missingRanges.slice(0, 3).map(range => `<span class="day-time"><span>${escapeHtml(displayTime(range.start))}</span><span class="time-divider">–</span><span>${escapeHtml(displayTime(range.end))}</span></span>`).join('')}${missingRanges.length > 3 ? `<span class="portal-more">+${missingRanges.length - 3}구간</span>` : ''}<span class="day-hours">예정 ${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ''}</span>` : ''}
@@ -578,9 +579,10 @@ function renderCalendar() {
 function manualCopySource(day) {
     if (state.schedule?.year !== state.year || state.schedule?.month !== state.month) return null;
     const entry = getEffectiveDay(day);
-    if (!entry?.specific || entry.excluded) return null;
+    // Copy from any day that has a work time — a manual entry or a weekday-repeat rule.
+    if (!entry?.value || entry.excluded) return null;
     return { year: state.year, month: state.month, userId: state.user?.id, day,
-        ranges: asRanges(entry.specific).map(({ start, end }) => ({ start, end })) };
+        ranges: entry.ranges.map(({ start, end }) => ({ start, end })) };
 }
 
 function clearScheduleDrag() {
@@ -1090,6 +1092,67 @@ async function removeDayEdit() {
     setDirty();
     renderCalendar();
     $('#day-dialog').close();
+}
+
+function bulkClearRange() {
+    const lastDay = daysInMonth(state.year, state.month);
+    const from = parseInt($('#bulk-clear-from').value, 10);
+    const to = parseInt($('#bulk-clear-to').value, 10);
+    if (!Number.isInteger(from) || !Number.isInteger(to)) return { lo: 0, hi: 0, days: [] };
+    const lo = Math.max(1, Math.min(lastDay, Math.min(from, to)));
+    const hi = Math.max(1, Math.min(lastDay, Math.max(from, to)));
+    const days = [];
+    for (let day = lo; day <= hi; day += 1) {
+        const entry = getEffectiveDay(day);
+        if (entry?.value && !entry.excluded) days.push(day);
+    }
+    return { lo, hi, days };
+}
+
+function updateBulkClearInfo() {
+    const { days } = bulkClearRange();
+    $('#bulk-clear-info').textContent = days.length
+        ? `이 범위에 예정 일정이 있는 ${days.length}일을 지웁니다.`
+        : '이 범위에 지울 예정 일정이 없습니다.';
+    $('#bulk-clear-submit').disabled = days.length === 0;
+}
+
+function openBulkClearDialog() {
+    const lastDay = daysInMonth(state.year, state.month);
+    for (const id of ['bulk-clear-from', 'bulk-clear-to']) $(`#${id}`).max = lastDay;
+    $('#bulk-clear-from').value = 1;
+    $('#bulk-clear-to').value = lastDay;
+    showError($('#bulk-clear-error'), '');
+    updateBulkClearInfo();
+    $('#bulk-clear-dialog').showModal();
+}
+
+async function handleBulkClear(event) {
+    event.preventDefault();
+    if (event.submitter?.value === 'cancel') return $('#bulk-clear-dialog').close();
+    const { lo, hi, days } = bulkClearRange();
+    if (!days.length) { showError($('#bulk-clear-error'), '선택한 범위에 지울 예정 일정이 없습니다.'); return; }
+    const revision = scheduleRevision();
+    if (!await confirmAction({
+        title: '여러 날 예정 일정 삭제',
+        message: `${state.year}년 ${state.month}월 ${lo}일 ~ ${hi}일`,
+        details: [`예정 일정이 있는 ${days.length}일을 지웁니다 (${days.join(', ')}일).`,
+            '요일 반복이 걸린 날은 그날만 제외합니다. 포털에 등록된 기록은 삭제하지 않습니다.'],
+        confirmLabel: `${days.length}일 삭제`, destructive: true })) return;
+    if (!verifyScheduleRevision(revision)) return;
+    for (const day of days) {
+        const entry = getEffectiveDay(day);
+        delete state.schedule.specialDates[String(day)];
+        state.schedule.vacationDates = state.schedule.vacationDates.filter(value => value !== day);
+        // A day covered by a weekday-repeat rule must be excluded to become empty.
+        if (entry.recurring.length) state.schedule.vacationDates.push(day);
+        state.schedule.holidayWorkDates = (state.schedule.holidayWorkDates || []).filter(value => value !== day);
+    }
+    state.schedule.vacationDates.sort((a, b) => a - b);
+    setDirty();
+    renderCalendar();
+    $('#bulk-clear-dialog').close();
+    toast(`${days.length}일의 예정 일정을 지웠습니다. 저장하려면 '일정 저장'을 누르세요.`, 'success');
 }
 
 function renderRepeatRules() {
@@ -1868,6 +1931,9 @@ function bindEvents() {
         if (applyDayEdit()) $('#day-dialog').close();
     });
     $('#remove-day-button').addEventListener('click', removeDayEdit);
+    $('#bulk-clear-button').addEventListener('click', openBulkClearDialog);
+    $('#bulk-clear-form').addEventListener('submit', handleBulkClear);
+    for (const id of ['bulk-clear-from', 'bulk-clear-to']) $(`#${id}`).addEventListener('input', updateBulkClearInfo);
     $('#repeat-settings-button').addEventListener('click', () => {
         renderRepeatRules();
         $('#repeat-dialog').showModal();
