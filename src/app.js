@@ -79,6 +79,14 @@ function createFixedWindowLimiter({ windowMs, limit }) {
     };
 }
 
+// Only this route holds the submitted account, so its reason is logged with the
+// submitted values removed rather than trusted to stay out of the message.
+function withoutSecrets(error, secrets) {
+    const message = secrets.filter((secret) => typeof secret === 'string' && secret.length >= 4)
+        .reduce((text, secret) => text.split(secret).join('***'), String(error?.message || '알 수 없는 오류'));
+    return Object.assign(new Error(message), { code: error?.code, portalSteps: error?.portalSteps });
+}
+
 function safeTokenEqual(left, right) {
     const a = Buffer.from(String(left || ''));
     const b = Buffer.from(String(right || ''));
@@ -435,7 +443,9 @@ function createApp(config, overrides = {}) {
         try {
             try {
                 if (await runtime.verifyCredentials({ portalId, portalPassword }) !== true) throw new Error('Unverified credentials');
-            } catch {
+            } catch (error) {
+                // The user only sees a generic message here, so the reason must reach the server log.
+                logError('portal-credential', withoutSecrets(error, [portalPassword, portalId]), { userId });
                 db.addAudit(userId, 'portal_credential_verification_failed', {}, req.ip);
                 return res.status(422).json({ error: '학교 포털 로그인 또는 근로 일지 접근을 확인하지 못했습니다. 아이디·비밀번호와 포털 상태를 확인해주세요. 입력한 정보는 저장하지 않았습니다.' });
             }

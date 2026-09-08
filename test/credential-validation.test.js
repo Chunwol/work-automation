@@ -8,14 +8,16 @@ const { decryptSecret } = require('../src/lib/security');
 const { PortalHttpClient } = require('../src/automation/portal-http-client');
 const { verifyPortalCredentials } = require('../src/automation/portal');
 
-function setup(t, verify) {
+function setup(t, verify, logged = []) {
     const masterKey = crypto.randomBytes(32);
     const runtime = createApp({ databasePath: ':memory:', masterKey, publicDir: path.resolve(__dirname, '../public'),
         cookieSecure: false, trustProxy: false, sessionTtlMs: 3600000, automationConcurrency: 1, nodeEnv: 'test' }, {
-        verifyPortalCredentials: verify, calendar: async () => ({ holidays: [], error: null })
+        verifyPortalCredentials: verify, calendar: async () => ({ holidays: [], error: null }),
+        logError: (scope, error, context) => logged.push({ scope, message: error.message, code: error.code,
+            portalSteps: error.portalSteps, ...context })
     });
     t.after(() => runtime.db.close());
-    return { ...runtime, masterKey };
+    return { ...runtime, masterKey, logged };
 }
 
 async function signup(runtime, name = 'tester') {
@@ -56,6 +58,31 @@ test('credentials are verified before encryption; failed replacements preserve t
     assert.equal(rejected.status, 422);
     assert.deepEqual(runtime.db.getPortalCredential(id), stored);
     assert.equal(JSON.stringify([accepted.body, rejected.body, runtime.db.raw.prepare('SELECT * FROM audit_logs').all()]).includes('private-password-must-not-leak'), false);
+    // The user sees one generic message, so the server log must carry the reason - with the submitted values removed.
+    const failures = runtime.logged.filter(entry => entry.scope === 'portal-credential');
+    assert.equal(failures.length, 3);
+    assert.deepEqual(failures.map(entry => entry.userId), [id, id, id]);
+    assert.equal(JSON.stringify(runtime.logged).includes('private-password-must-not-leak'), false);
+    assert.match(failures.at(-1).message, /\*\*\*/);
+    assert.match(failures[1].message, /Unverified credentials/);
+});
+
+test('a portal login refusal reaches the server log with the step that refused', async t => {
+    const logged = [];
+    const runtime = setup(t, async () => {
+        throw Object.assign(new Error('학교 포털 로그인에 실패했습니다. 아이디·비밀번호, 포털의 비밀번호 변경 요구나 계정 잠금 여부를 확인해주세요.'),
+            { code: 'PORTAL_LOGIN_FAILED', portalSteps: ['POST https://portal.dongyang.ac.kr/proc/Login.do → 200', 'MenuAuth → 세션 오류 응답'] });
+    }, logged);
+    const { agent, csrf } = await signup(runtime, 'login-refused');
+    const response = await agent.put('/api/portal-credentials').set('X-CSRF-Token', csrf)
+        .send({ portalId: 'refused-id', portalPassword: 'refused-password' });
+    assert.equal(response.status, 422);
+    assert.match(response.body.error, /확인하지 못했습니다/);
+    const entry = logged.at(-1);
+    assert.equal(entry.scope, 'portal-credential');
+    assert.equal(entry.code, 'PORTAL_LOGIN_FAILED');
+    assert.equal(entry.portalSteps.at(-1), 'MenuAuth → 세션 오류 응답');
+    assert.match(entry.message, /비밀번호 변경 요구나 계정 잠금/);
 });
 
 test('pending verification prevents duplicate save/delete/jobs and cannot save after logout', async t => {

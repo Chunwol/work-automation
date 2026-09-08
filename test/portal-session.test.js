@@ -129,13 +129,19 @@ test('a refused login is reported as a login failure, not as an expired session'
     const form = '<form id="loginFrm"><input name="user_id" value=""><input name="user_password" value=""></form>';
     const requests = [];
     const client = new PortalHttpClient({ fetchImpl: async (url, init) => {
-        requests.push(`${init.method || 'GET'} ${new URL(url).pathname}`);
-        if (!init.body || !String(init.body).includes('user_password')) return new Response(form);
+        const { pathname } = new URL(url);
+        requests.push(`${init.method || 'GET'} ${pathname}`);
+        if (pathname === '/login_real.jsp') return new Response(form);
+        if (pathname === '/proc/Login.do') return new Response('<html>로그인 화면</html>');
         // The portal answers a refused login with its own session message on the next command.
         return new Response(JSON.stringify({ dmMain: { errMessage: '로그인 세션이 종료되었습니다.' } }));
     } });
     await assert.rejects(client.login('id', 'wrong-password'), (error) => error.code === 'PORTAL_LOGIN_FAILED'
-        && /아이디·비밀번호/.test(error.message) && !/세션이 만료/.test(error.message));
+        && /아이디·비밀번호/.test(error.message) && !/세션이 만료/.test(error.message)
+        // The trail says which portal step refused, without carrying any submitted value.
+        && error.portalSteps.some((step) => step.includes('POST https://portal.dongyang.ac.kr/proc/Login.do → 200'))
+        && error.portalSteps.at(-1) === 'MenuAuth → 세션 오류 응답'
+        && !JSON.stringify(error.portalSteps).includes('wrong-password'));
     assert.ok(requests.includes('POST /proc/Login.do'));
     assert.ok(!/wrong-password/.test(JSON.stringify(requests)));
     await client.close();

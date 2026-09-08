@@ -10,6 +10,8 @@ function entryOf(scope, error, context, time) {
         time, scope,
         message: String(error?.message ?? error ?? '알 수 없는 오류').slice(0, MESSAGE_LIMIT),
         ...(error?.code ? { code: String(error.code).slice(0, 60) } : {}),
+        // Addresses and statuses of the portal steps that led here, never their bodies.
+        ...(Array.isArray(error?.portalSteps) ? { portalSteps: error.portalSteps.slice(-16).map((step) => String(step).slice(0, 120)) } : {}),
         ...context,
         ...(stack ? { stack: stack.slice(0, STACK_LIMIT) } : {})
     };

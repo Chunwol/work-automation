@@ -31,6 +31,9 @@ test('failures are appended as one readable line per error and mirrored to the s
     assert.deepEqual([lines[0].time, lines[0].scope, lines[0].code, lines[0].jobId, lines[0].userId, lines[0].year, lines[0].month],
         ['2026-09-08T10:11:12.000Z', 'job', 'PORTAL_WEEK', 'job-1', 7, 2026, 9]);
     assert.ok(lines[0].stack.includes('error-log.test.js'));
+    assert.deepEqual(record('job', Object.assign(new Error('로그인 거절'), {
+        portalSteps: ['POST https://portal.dongyang.ac.kr/proc/Login.do → 200', 'MenuAuth → 세션 오류 응답']
+    }), { jobId: 'job-2' }).portalSteps.at(-1), 'MenuAuth → 세션 오류 응답');
     assert.equal(lines[1].scope, 'request');
     assert.equal(lines[1].path, '/api/jobs');
 });

@@ -55,6 +55,18 @@ class PortalHttpClient {
         this.parentKey = '';
         this.identity = null;
         this.catalog = null;
+        // Where the portal actually stopped answering. Addresses and statuses only.
+        this.steps = [];
+    }
+
+    trace(step) {
+        this.steps.push(step);
+        if (this.steps.length > 16) this.steps.shift();
+    }
+
+    withSteps(error) {
+        if (this.steps.length) error.portalSteps = [...this.steps];
+        return error;
     }
 
     async request(url, options = {}) {
@@ -84,9 +96,11 @@ class PortalHttpClient {
                     });
                 };
                 response = await (this.requestGate ? this.requestGate.run(send) : send());
-            } catch {
-                throw new Error('포털 요청이 완료되지 않았습니다. 저장 요청이었다면 재조회 후 결과를 확인하세요.');
+            } catch (error) {
+                this.trace(`${method} ${new URL(current).origin}${new URL(current).pathname} → ${error?.name === 'TimeoutError' ? 'timeout' : 'network'}`);
+                throw this.withSteps(new Error('포털 요청이 완료되지 않았습니다. 저장 요청이었다면 재조회 후 결과를 확인하세요.'));
             }
+            this.trace(`${method} ${new URL(current).origin}${new URL(current).pathname} → ${response.status}`);
             this.onRequest({ method, origin: new URL(current).origin, path: new URL(current).pathname, status: response.status });
             for (const value of response.headers.getSetCookie()) await this.jar.setCookie(value, current);
             if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -132,12 +146,20 @@ class PortalHttpClient {
         });
         let data;
         try { data = JSON.parse(response.text); } catch {
-            if (new URL(response.url).origin !== DMIS_ORIGIN || /id=["']loginFrm["']|로그인.*(종료|필요)|세션.*(종료|만료)/.test(response.text)) throw sessionExpired();
+            if (new URL(response.url).origin !== DMIS_ORIGIN || /id=["']loginFrm["']|로그인.*(종료|필요)|세션.*(종료|만료)/.test(response.text)) {
+                this.trace(`${command} → 로그인 화면 응답`);
+                throw sessionExpired();
+            }
+            this.trace(`${command} → JSON 아님`);
             throw new Error(`${command} 응답이 JSON이 아닙니다. 인증 또는 점검 상태를 확인해주세요.`);
         }
         if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${command} 응답 형식이 올바르지 않습니다.`);
-        if (/로그인.*(종료|필요)|세션.*(종료|만료)/.test(`${data.dmMain?.errMessage || ''} ${data.dmMain?.strMessage || ''}`)) throw sessionExpired();
+        if (/로그인.*(종료|필요)|세션.*(종료|만료)/.test(`${data.dmMain?.errMessage || ''} ${data.dmMain?.strMessage || ''}`)) {
+            this.trace(`${command} → 세션 오류 응답`);
+            throw sessionExpired();
+        }
         if (data.dmMain?.errMessage) {
+            this.trace(`${command} → 거절`);
             throw new Error(`${command} 요청을 포털이 거절했습니다. 로그인 세션 또는 입력 조건을 확인해주세요.`);
         }
         return data;
@@ -187,8 +209,13 @@ class PortalHttpClient {
 
     async login(portalId, portalPassword, onStage = () => {}) {
         this.loginSignal = AbortSignal.timeout(this.loginTimeoutMs);
+        this.steps = [];
         try {
             return await this.#authenticate(portalId, portalPassword, onStage);
+        } catch (error) {
+            // Which portal step stopped answering is the only way to tell a wrong password
+            // from a portal outage, a changed login page or a blocked account.
+            throw this.withSteps(error);
         } finally {
             this.loginSignal = null;
         }
@@ -231,6 +258,7 @@ class PortalHttpClient {
             }
             return await this.#initializeSession(onStage, this.identity.studentNo);
         }
+        catch (error) { throw this.withSteps(error); }
         finally { this.loginSignal = null; }
     }
 
