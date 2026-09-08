@@ -19,6 +19,7 @@ class FakePortal extends PortalHttpClient {
         this.saves = [];
         this.changes = [];
         this.vacation = 'Y';
+        this.week = { week_cnt: '27', CheckDate: '3' };
         this.holidays = [];
         this.mode = 'ok';
     }
@@ -34,7 +35,7 @@ class FakePortal extends PortalHttpClient {
             return { listMain: structuredClone(this.records.filter((row) => row.SCHO_CD === key.strSchoCd && row.WORK_DEPT_CD === key.strWorkDeptCd)),
                 listStdt: [{ STUDENT_NO: 'test-student', STUDENT_YEAR: '2', DAN_CD: '1', DEPT_CD: 'C' }] };
         }
-        if (command === 'Checkweek') return { dmMain: { week_cnt: '27', CheckDate: '3' } };
+        if (command === 'Checkweek') return { dmMain: this.week };
         if (command === 'Vacation') return { dmMain: { strRemark: this.vacation } };
         if (command === 'Holi') return { listHoliday: this.holidays.map((date) => ({ HOLIDAY: date })) };
         throw new Error(`unexpected ${command}`);
@@ -430,6 +431,42 @@ test('existing records need only week lookup, while new dates still verify vacat
     assert.equal(client.calls.filter(name => name === 'Checkweek').length, 2);
     assert.equal(client.calls.filter(name => name === 'Vacation').length, 1);
     assert.equal(client.calls.filter(name => name === 'Holi').length, 1);
+});
+
+test('date rules follow the official screen and name the portal field that failed', async () => {
+    // The screen counts only 'Y' as vacation, so blank or absent remarks must not fail the run.
+    for (const remark of ['N', '', null, ' n ']) {
+        const client = new FakePortal();
+        client.vacation = remark;
+        assert.equal((await runPortalAutomation(options(client))).insertedCount, 1);
+    }
+    // A blank remark keeps the stricter term limit that the same schedule clears during vacation.
+    const week = (remark) => {
+        const client = new FakePortal();
+        client.vacation = remark;
+        client.catalog.listSchoCd[0].NAT_AMT = '1';
+        const opts = options(client);
+        for (const day of [1, 2, 3, 4]) opts.schedule.specialDates[day] = { start: '0900', end: '1500' };
+        return [client, opts];
+    };
+    await assert.rejects(runPortalAutomation(week('')[1]), /주간 근로시간 한도/);
+    assert.equal((await runPortalAutomation(week('Y')[1])).insertedCount, 4);
+    for (const [arrange, expected] of [
+        [client => { client.vacation = '방학아님'; }, /방학 구분 값/],
+        [client => { client.week = { week_cnt: '', CheckDate: '3' }; }, /주차가 아직 생성되지/],
+        [client => { client.week = { week_cnt: '27', CheckDate: '9' }; }, /요일 값/],
+        [client => { client.holidays = ['어제']; }, /공휴일 응답의 날짜 형식/]
+    ]) {
+        const client = new FakePortal();
+        arrange(client);
+        await assert.rejects(runPortalAutomation(options(client)), expected);
+        assert.equal(client.saves.length, 0);
+    }
+    // A separated holiday date still blocks the restricted scholarship on that day.
+    const dashed = new FakePortal();
+    dashed.holidays = ['2026-09-01'];
+    await assert.rejects(runPortalAutomation(options(dashed)), /공휴일에는/);
+    assert.equal(dashed.saves.length, 0);
 });
 
 test('query reports real intermediate stages and performs no writes', async () => {

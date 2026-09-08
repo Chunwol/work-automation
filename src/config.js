@@ -88,6 +88,9 @@ function createConfig(overrides = {}) {
         dataDir,
         maintenanceFile: path.join(dataDir, '.deployment-pause'),
         databasePath: overrides.databasePath || process.env.DATABASE_PATH || path.join(dataDir, 'worklog.db'),
+        errorLogPath: overrides.errorLogPath || process.env.ERROR_LOG_PATH || path.join(dataDir, 'error.log'),
+        errorLogMaxBytes: overrides.errorLogMaxBytes
+            || parseInteger(process.env.ERROR_LOG_MAX_BYTES, 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
         masterKey: configuredKey || getOrCreateLocalMasterKey(dataDir),
         setupToken: setupToken || null,
         host: overrides.host || process.env.HOST || '127.0.0.1',

@@ -55,8 +55,9 @@ function validateMonthlySettings(payload) {
 }
 
 class MonthlyScheduler {
-    constructor({ db, queue, calendar, isBusy = () => false, paused = () => false, activeUsers = new Set(), now = () => new Date() }) {
-        Object.assign(this, { db, queue, calendar, isBusy, paused, activeUsers, now });
+    constructor({ db, queue, calendar, isBusy = () => false, paused = () => false, activeUsers = new Set(),
+        now = () => new Date(), logError = () => {} }) {
+        Object.assign(this, { db, queue, calendar, isBusy, paused, activeUsers, now, logError });
         this.stopped = false;
         this.pendingTick = null;
         this.timer = null;
@@ -65,9 +66,10 @@ class MonthlyScheduler {
     start() {
         if (this.timer) return;
         this.stopped = false;
-        this.timer = setInterval(() => { void this.tick().catch(error => console.error('Monthly scheduler:', error.message)); }, 30_000);
+        const report = (error) => this.logError('scheduler', error);
+        this.timer = setInterval(() => { void this.tick().catch(report); }, 30_000);
         this.timer.unref();
-        void this.tick().catch(error => console.error('Monthly scheduler:', error.message));
+        void this.tick().catch(report);
     }
 
     async stop() {
@@ -128,6 +130,7 @@ class MonthlyScheduler {
                 if (job) {
                     this.db.failJob(job.id, error.message);
                     this.db.addJobLog(job.id, 'error', error.message);
+                    this.logError('scheduled-job', error, { jobId: job.id, userId: settings.userId });
                 } else throw error;
             } finally {
                 this.activeUsers.delete(settings.userId);

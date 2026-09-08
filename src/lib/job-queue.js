@@ -1,10 +1,11 @@
 const { EventEmitter } = require('events');
 
 class JobQueue {
-    constructor({ db, executeJob, concurrency = 1, onFailure = () => {} }) {
+    constructor({ db, executeJob, concurrency = 1, onFailure = () => {}, logError = () => {} }) {
         this.db = db;
         this.executeJob = executeJob;
         this.onFailure = onFailure;
+        this.logError = logError;
         this.concurrency = Math.max(1, concurrency);
         this.pending = [];
         this.running = 0;
@@ -68,6 +69,9 @@ class JobQueue {
             const message = String(error?.message || '알 수 없는 오류');
             this.db.failJob(item.id, message);
             this.db.addJobLog(item.id, 'error', message);
+            // The database keeps the user-facing log; this keeps the same failure in the server log.
+            this.logError('job', error, { jobId: item.id, userId: item.userId, type: item.type,
+                year: item.year, month: item.month, scheduled: Boolean(item.scheduled) });
             try { await this.onFailure(item, error); }
             catch { this.db.addJobLog(item.id, 'error', '재실행 예약에 실패했습니다. 작업 결과를 직접 확인해주세요.'); }
         } finally {

@@ -123,18 +123,32 @@ async function querySnapshot(client, year, month, selection, onStep = () => {}) 
     return { assignments, selected, records, allRecords };
 }
 
-async function dateRules(client, assignment, date) {
-    const key = { ...assignment.requestKey, strCheckDate: date, strworkdt: date, strDt: date };
+const dateKey = (assignment, date) => ({ ...assignment.requestKey, strCheckDate: date, strworkdt: date, strDt: date });
+const shortValue = (value) => JSON.stringify(String(value ?? '').slice(0, 20));
+
+async function weekOfDate(client, key, date) {
     const week = (await client.command('Checkweek', key)).dmMain;
+    const count = String(week?.week_cnt ?? '').trim();
+    const weekday = String(week?.CheckDate ?? '').trim();
+    // The portal screen shows the same guidance when the year has no generated week rows.
+    if (!/^\d+$/.test(count)) throw new Error(`${date}: 포털에 해당 연도 주차가 아직 생성되지 않았습니다. 포털 근로일지 화면에서 같은 날짜를 확인해주세요.`);
+    if (!/^[1-7]$/.test(weekday)) throw new Error(`${date}: 포털 주차 응답의 요일 값(${shortValue(week?.CheckDate)})을 확인하지 못했습니다.`);
+    return { week: count, weekday: '일월화수목금토'[Number(weekday) - 1] };
+}
+
+async function dateRules(client, assignment, date) {
+    const key = dateKey(assignment, date);
+    const { week, weekday } = await weekOfDate(client, key, date);
     const vacation = (await client.command('Vacation', key)).dmMain;
-    const holidays = requireArray(await client.command('Holi', key), 'listHoliday', 'Holi');
-    if (!/^\d+$/.test(String(week?.week_cnt || '')) || !/^[1-7]$/.test(String(week?.CheckDate || ''))
-        || !['Y', 'N'].includes(vacation?.strRemark)
-        || holidays.some((row) => !/^\d{8}$/.test(String(row.HOLIDAY)))) {
-        throw new Error('포털 주차·방학·공휴일 응답을 확인하지 못했습니다.');
+    const remark = String(vacation?.strRemark ?? '').trim().toUpperCase();
+    // The portal screen counts only 'Y' as vacation, so a blank value keeps the stricter term limit.
+    if (remark && !['Y', 'N'].includes(remark)) throw new Error(`${date}: 포털 방학 구분 값(${shortValue(vacation?.strRemark)})을 확인하지 못했습니다.`);
+    const holidays = requireArray(await client.command('Holi', key), 'listHoliday', 'Holi').map((row) => String(row?.HOLIDAY ?? '').trim());
+    // A blank row never matches on the portal screen either; any other unreadable value is a format change.
+    if (holidays.some((value) => value && !/^\d{8}$/.test(normalizeDate(value)))) {
+        throw new Error(`${date}: 포털 공휴일 응답의 날짜 형식을 확인하지 못했습니다.`);
     }
-    return { week: String(week.week_cnt), weekday: '일월화수목금토'[Number(week.CheckDate) - 1],
-        vacation: vacation.strRemark === 'Y', holiday: holidays.some((row) => row.HOLIDAY === date), key };
+    return { week, weekday, vacation: remark === 'Y', holiday: holidays.some((value) => normalizeDate(value) === date), key };
 }
 
 async function preflight(client, snapshot, logs, { onStep = () => {} } = {}) {
@@ -168,11 +182,7 @@ async function preflight(client, snapshot, logs, { onStep = () => {} } = {}) {
             for (const record of sameAssignment) {
                 if (!weeks.has(record.date)) {
                     // Existing records only need their week number, not holiday/vacation checks.
-                    const week = (await client.command('Checkweek', { ...assignment.requestKey, strCheckDate: record.date, strworkdt: record.date, strDt: record.date })).dmMain;
-                    if (!/^\d+$/.test(String(week?.week_cnt || '')) || !/^[1-7]$/.test(String(week?.CheckDate || ''))) {
-                        throw new Error('포털 주차 응답을 확인하지 못했습니다.');
-                    }
-                    weeks.set(record.date, String(week.week_cnt));
+                    weeks.set(record.date, (await weekOfDate(client, dateKey(assignment, record.date), record.date)).week);
                 }
                 if (weeks.get(record.date) === rule.week) weekMinutes += duration(record);
             }
@@ -320,7 +330,8 @@ async function runPortalAutomation(options) {
                 assignments: snapshot.assignments.map(publicAssignment) };
         } catch (error) {
             if (insertedCount) throw new Error(`${insertedCount}건은 저장·검증 완료되었습니다. 나머지는 중단: ${error.message}`);
-            if (error.code === 'PORTAL_ASSIGNMENT_PENDING' && saveAttempts === 0) error.portalWrites = 0;
+            // No Save was sent, so the caller may restart this run without replaying a write.
+            if (saveAttempts === 0) error.portalWrites = 0;
             throw error;
         } finally { activePortalAccounts.delete(lock); }
     });

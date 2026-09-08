@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const { createDatabase } = require('./lib/database');
+const { createErrorLog } = require('./lib/error-log');
 const { JobQueue } = require('./lib/job-queue');
 const {
     createCsrfToken,
@@ -86,6 +87,8 @@ function safeTokenEqual(left, right) {
 
 function createRuntime(config, overrides = {}) {
     const db = overrides.db || createDatabase(config.databasePath);
+    const logError = overrides.logError
+        || createErrorLog({ filePath: config.errorLogPath, maxBytes: config.errorLogMaxBytes });
     const automation = overrides.automation || { queryPortalRecords, runPortalAutomation, mutatePortalRecord };
     const requestGate = new PortalRequestGate({ intervalMs: config.portalRequestIntervalMs });
     const clientFactory = overrides.portalClientFactory || (() => new PortalHttpClient({ requestGate }));
@@ -131,6 +134,7 @@ function createRuntime(config, overrides = {}) {
     const queue = overrides.queue || new JobQueue({
         db,
         executeJob,
+        logError,
         onFailure: (item, error) => {
             if (item.scheduled && error.code === 'PORTAL_ASSIGNMENT_PENDING' && error.portalWrites === 0) {
                 const retryAt = db.scheduleApprovalRetry(item.id, (overrides.now?.() || new Date()).toISOString());
@@ -139,18 +143,18 @@ function createRuntime(config, overrides = {}) {
         },
         concurrency: config.automationConcurrency
     });
-    return { db, queue, portalSessions,
+    return { db, queue, portalSessions, logError,
         verifyCredentials: (credentials) => (overrides.verifyPortalCredentials || verifyPortalCredentials)({ ...credentials, clientFactory }),
         mutateRecord: (userId, options) => automation.mutatePortalRecord({ ...options, ...decryptCredentials(userId), clientFactory }) };
 }
 
 function createApp(config, overrides = {}) {
     const runtime = createRuntime(config, overrides);
-    const { db, queue } = runtime;
+    const { db, queue, logError } = runtime;
     const calendarProvider = overrides.calendar || getCalendar;
     const activeMutations = new Set();
     const activeVerifications = new Set();
-    const scheduler = new MonthlyScheduler({ db, queue, calendar: calendarProvider,
+    const scheduler = new MonthlyScheduler({ db, queue, calendar: calendarProvider, logError,
         activeUsers: activeMutations, isBusy: userId => activeMutations.has(userId) || activeVerifications.has(userId),
         paused: () => Boolean(config.maintenanceFile && fs.existsSync(config.maintenanceFile)),
         now: overrides.now || (() => new Date()) });
@@ -748,7 +752,7 @@ function createApp(config, overrides = {}) {
 
     app.use((error, req, res, next) => {
         if (res.headersSent) return next(error);
-        console.error(`[${new Date().toISOString()}] ${req.method} ${req.path}: ${error.message}`);
+        logError('request', error, { method: req.method, path: req.path, userId: req.auth?.user?.id });
         res.status(500).json({ error: '서버 처리 중 오류가 발생했습니다.' });
     });
 

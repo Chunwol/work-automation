@@ -12,6 +12,10 @@ PC accounts, schedules, credentials and screenshots are never uploaded.
 - `secrets/master-key`: encryption key; losing it prevents credential recovery.
 - `secrets/setup-token`: first-administrator setup token. General signup needs no token.
 - `tls`, `acme`, `certbot-lib`, `certbot-logs`: independent TLS renewal state.
+- `data/error.log`: job, request and scheduler failures, one JSON line each, rotated
+  once at 1 MB (`error.log.1`). The same lines go to stderr, so `docker logs` shows
+  them until the container is replaced; the file survives replacement. No account,
+  password or cookie is written.
 - `data/backups`: consistent SQLite snapshots before image replacement.
 - `backups`: original NAS configuration retained for recovery.
 - Container `work-automation`: non-root, read-only image, dropped capabilities,

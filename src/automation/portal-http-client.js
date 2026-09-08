@@ -11,6 +11,12 @@ function sessionExpired() {
     return error;
 }
 
+function loginFailed() {
+    const error = new Error('학교 포털 로그인에 실패했습니다. 아이디·비밀번호, 포털의 비밀번호 변경 요구나 계정 잠금 여부를 확인해주세요.');
+    error.code = 'PORTAL_LOGIN_FAILED';
+    return error;
+}
+
 function checkedUrl(value, base) {
     const url = new URL(value, base);
     if (!ALLOWED_ORIGINS.has(url.origin) || url.username || url.password) {
@@ -202,10 +208,16 @@ class PortalHttpClient {
         fields.set('user_id', portalId);
         fields.set('user_password', portalPassword);
         onStage('학교 포털 로그인과 SSO 인증을 진행합니다.', 5);
-        await this.navigate('https://portal.dongyang.ac.kr/proc/Login.do?targetId=DMIS&RelayState=/', {
-            method: 'POST', body: fields.toString(), contentType: 'application/x-www-form-urlencoded', referer: initial.url
-        });
-        return this.#initializeSession(onStage);
+        try {
+            await this.navigate('https://portal.dongyang.ac.kr/proc/Login.do?targetId=DMIS&RelayState=/', {
+                method: 'POST', body: fields.toString(), contentType: 'application/x-www-form-urlencoded', referer: initial.url
+            });
+            return await this.#initializeSession(onStage);
+        } catch (error) {
+            // A brand-new login that lands on the portal's session error was refused, not aged out.
+            if (error.code === 'PORTAL_AUTH_EXPIRED') throw loginFailed();
+            throw error;
+        }
     }
 
     async refreshSession(onStage = () => {}) {

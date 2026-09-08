@@ -125,6 +125,45 @@ test('explicit authentication signals differ from business rejection and credent
     assert.equal(clients[0].closes, 1);
 });
 
+test('a refused login is reported as a login failure, not as an expired session', async () => {
+    const form = '<form id="loginFrm"><input name="user_id" value=""><input name="user_password" value=""></form>';
+    const requests = [];
+    const client = new PortalHttpClient({ fetchImpl: async (url, init) => {
+        requests.push(`${init.method || 'GET'} ${new URL(url).pathname}`);
+        if (!init.body || !String(init.body).includes('user_password')) return new Response(form);
+        // The portal answers a refused login with its own session message on the next command.
+        return new Response(JSON.stringify({ dmMain: { errMessage: '로그인 세션이 종료되었습니다.' } }));
+    } });
+    await assert.rejects(client.login('id', 'wrong-password'), (error) => error.code === 'PORTAL_LOGIN_FAILED'
+        && /아이디·비밀번호/.test(error.message) && !/세션이 만료/.test(error.message));
+    assert.ok(requests.includes('POST /proc/Login.do'));
+    assert.ok(!/wrong-password/.test(JSON.stringify(requests)));
+    await client.close();
+});
+
+test('an expired session restarts a run that sent no write, but never one that already saved', async () => {
+    for (const portalWrites of [0, undefined]) {
+        const { pool, clients } = fixture();
+        let attempts = 0;
+        const run = () => {
+            attempts += 1;
+            if (attempts === 1) throw Object.assign(expired(), { portalWrites });
+            return 'saved';
+        };
+        if (portalWrites === 0) {
+            assert.equal(await pool.use('1:v1', options, run, { readOnly: false }), 'saved');
+            assert.equal(attempts, 2);
+            assert.equal(clients.length, 2);
+            assert.equal(clients[1].logins, 1);
+        } else {
+            await assert.rejects(pool.use('1:v1', options, run, { readOnly: false }), /Expired/);
+            assert.equal(attempts, 1);
+            assert.equal(clients.length, 1);
+        }
+        await pool.close();
+    }
+});
+
 test('web query jobs reuse the pooled session and app logout invalidates it', async t => {
     const { clientFactory, clients } = fixture();
     const runtime = createApp({ databasePath: ':memory:', masterKey: crypto.randomBytes(32), publicDir: path.resolve(__dirname, '../public'),

@@ -86,8 +86,10 @@ class PortalSessionPool {
             if (entry.invalidated) throw new Error('포털 연결 또는 앱 로그인 상태가 바뀌어 작업을 중단했습니다.');
             try { return await operation(entry.client); }
             catch (error) {
-                // Only a read-only query may restart. A Save/Change is never replayed here.
-                if (!readOnly || reauthenticated || error.code !== 'PORTAL_AUTH_EXPIRED' || entry.invalidated) throw error;
+                // A read-only query, or a run that reported no portal write, may restart after a
+                // new login. A Save/Change that was already sent is never replayed here.
+                const restartable = readOnly || error.portalWrites === 0;
+                if (!restartable || reauthenticated || error.code !== 'PORTAL_AUTH_EXPIRED' || entry.invalidated) throw error;
                 await renew();
                 if (entry.invalidated) throw new Error('포털 연결 또는 앱 로그인 상태가 바뀌어 조회를 중단했습니다.');
                 return await operation(entry.client);
