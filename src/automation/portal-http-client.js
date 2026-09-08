@@ -17,6 +17,30 @@ function loginFailed() {
     return error;
 }
 
+// Screens the portal puts in front of SSO. The app cannot pass them; a person must,
+// once, in a browser. Checked only after the login already failed.
+const INTERSTITIALS = [
+    [/비밀번호를?\s*변경|비밀번호\s*변경\s*(안내|기간|주기)|사용기간.*만료/, '포털이 비밀번호 변경을 요구하고 있습니다'],
+    [/약관.*동의|개인정보.*(수집|이용).*동의/, '포털이 약관·개인정보 동의를 요구하고 있습니다'],
+    [/본인\s*인증|휴대폰\s*인증|휴대전화\s*인증/, '포털이 본인·휴대폰 인증을 요구하고 있습니다'],
+    [/계정.*(잠금|잠겼|정지)|로그인.*(제한|차단)|비밀번호.*[0-9]+회.*오류/, '포털이 계정 잠금 또는 로그인 제한을 안내하고 있습니다']
+];
+
+function landingRefusal(landing) {
+    const text = String(landing?.text || '');
+    // The login page itself links to a password-change page, so a page that still carries
+    // the login form means the account was refused, not that a screen is blocking SSO.
+    if (text && !/id=["']loginFrm["']|name=["']loginFrm["']/.test(text)) {
+        const blocked = INTERSTITIALS.find(([pattern]) => pattern.test(text));
+        if (blocked) {
+            const error = new Error(`${blocked[1]}. 브라우저로 학교 포털에 직접 로그인해 그 화면을 먼저 처리한 뒤 다시 시도해주세요.`);
+            error.code = 'PORTAL_LOGIN_BLOCKED';
+            return error;
+        }
+    }
+    return loginFailed();
+}
+
 function checkedUrl(value, base) {
     const url = new URL(value, base);
     if (!ALLOWED_ORIGINS.has(url.origin) || url.username || url.password) {
@@ -235,14 +259,15 @@ class PortalHttpClient {
         fields.set('user_id', portalId);
         fields.set('user_password', portalPassword);
         onStage('학교 포털 로그인과 SSO 인증을 진행합니다.', 5);
+        let landing = null;
         try {
-            await this.navigate('https://portal.dongyang.ac.kr/proc/Login.do?targetId=DMIS&RelayState=/', {
+            landing = await this.navigate('https://portal.dongyang.ac.kr/proc/Login.do?targetId=DMIS&RelayState=/', {
                 method: 'POST', body: fields.toString(), contentType: 'application/x-www-form-urlencoded', referer: initial.url
             });
             return await this.#initializeSession(onStage);
         } catch (error) {
             // A brand-new login that lands on the portal's session error was refused, not aged out.
-            if (error.code === 'PORTAL_AUTH_EXPIRED') throw loginFailed();
+            if (error.code === 'PORTAL_AUTH_EXPIRED') throw landingRefusal(landing);
             throw error;
         }
     }

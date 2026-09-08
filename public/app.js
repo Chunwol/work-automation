@@ -193,6 +193,26 @@ function setButtonBusy(button, busy, label) {
     }
 }
 
+const SAVED_USERNAME_KEY = 'worklog_saved_username';
+
+function readSavedUsername() {
+    try { return localStorage.getItem(SAVED_USERNAME_KEY) || ''; } catch { return ''; }
+}
+
+// Prefill the login id from the last "아이디 저장" and reflect it in the checkbox.
+function applySavedUsername() {
+    const saved = readSavedUsername();
+    if (saved && !$('#username').value) $('#username').value = saved;
+    $('#remember-username').checked = Boolean(saved);
+}
+
+function persistUsername(username) {
+    try {
+        if ($('#remember-username').checked && username) localStorage.setItem(SAVED_USERNAME_KEY, username);
+        else localStorage.removeItem(SAVED_USERNAME_KEY);
+    } catch { /* private mode or storage disabled: skip silently */ }
+}
+
 function showAuthView(setupRequired, setupTokenRequired = false, mode = 'login') {
     state.setupRequired = setupRequired;
     state.setupTokenRequired = setupTokenRequired;
@@ -206,6 +226,8 @@ function showAuthView(setupRequired, setupTokenRequired = false, mode = 'login')
     $('#password-confirm-field').hidden = !isSignup;
     $('#setup-hint').hidden = !isSetup && !isSignup;
     $('#setup-hint').textContent = isSetup ? '서버 운영자를 위한 관리자 설정입니다. 비밀번호는 10자 이상 사용해주세요.' : '회원가입 후 학교 포털 계정을 별도로 연결합니다. 비밀번호는 10자 이상 사용해주세요.';
+    $('#login-options').hidden = state.authMode !== 'login';
+    if (state.authMode === 'login') applySavedUsername();
     $('#admin-setup-button').hidden = !setupRequired || isSetup;
     $('#login-tab').setAttribute('aria-pressed', String(state.authMode === 'login'));
     $('#signup-tab').setAttribute('aria-pressed', String(isSignup));
@@ -681,14 +703,60 @@ function renderDayPortalRecords(day) {
     const container = $('#day-portal-records');
     const records = portalRecordsForDay(day);
     container.hidden = !records.length;
+    const deletableCount = records.filter((record) => !record.confirmed && record.sequence).length;
     container.innerHTML = records.length ? `<h3>포털에 등록된 기록</h3>${records.map((record, index) => {
         const kind = portalRecordKind(record);
         const disabled = record.confirmed || !record.sequence;
-        return `<article class="day-portal-record ${kind.className}"><div><strong>${escapeHtml(displayTime(record.start))} ~ ${escapeHtml(displayTime(record.end))}</strong><span>${record.confirmed ? '확인 완료' : '미확인'}</span></div><p>${escapeHtml(record.scholarshipName || record.scholarshipCode)} · ${escapeHtml(record.workDepartmentName || record.workDepartmentCode)}</p><p class="portal-record-content">${escapeHtml(record.content || '근무내용 없음')}</p><div class="portal-record-actions"><button type="button" class="text-button" data-portal-action="update" data-record-index="${index}" ${disabled ? 'disabled' : ''}>포털 일지 수정</button><button type="button" class="text-button portal-delete-action" data-portal-action="delete" data-record-index="${index}" ${disabled ? 'disabled' : ''}>포털 일지 삭제</button></div>${disabled ? `<p class="portal-record-locked">${record.confirmed ? '확인 완료된 기록은 학교 담당자에게 문의해주세요.' : '수정·삭제하려면 기록만 조회를 다시 실행해주세요.'}</p>` : ''}</article>`;
-    }).join('')}` : '';
+        return `<article class="day-portal-record ${kind.className}"><div class="day-portal-record-head">${disabled ? '' : `<input type="checkbox" class="portal-record-select" data-select-record="${index}" aria-label="${escapeHtml(displayTime(record.start))}~${escapeHtml(displayTime(record.end))} 기록 선택">`}<div><strong>${escapeHtml(displayTime(record.start))} ~ ${escapeHtml(displayTime(record.end))}</strong><span>${record.confirmed ? '확인 완료' : '미확인'}</span></div></div><p>${escapeHtml(record.scholarshipName || record.scholarshipCode)} · ${escapeHtml(record.workDepartmentName || record.workDepartmentCode)}</p><p class="portal-record-content">${escapeHtml(record.content || '근무내용 없음')}</p><div class="portal-record-actions"><button type="button" class="text-button" data-portal-action="update" data-record-index="${index}" ${disabled ? 'disabled' : ''}>포털 일지 수정</button><button type="button" class="text-button portal-delete-action" data-portal-action="delete" data-record-index="${index}" ${disabled ? 'disabled' : ''}>포털 일지 삭제</button></div>${disabled ? `<p class="portal-record-locked">${record.confirmed ? '확인 완료된 기록은 학교 담당자에게 문의해주세요.' : '수정·삭제하려면 기록만 조회를 다시 실행해주세요.'}</p>` : ''}</article>`;
+    }).join('')}${deletableCount > 1 ? `<div class="portal-bulk-actions"><button type="button" id="portal-bulk-delete" class="button button-destructive" disabled>선택한 기록 삭제</button></div>` : ''}` : '';
     $$('[data-portal-action]', container).forEach((button) => button.addEventListener('click', () => {
         openPortalRecordDialog(records[Number(button.dataset.recordIndex)], button.dataset.portalAction);
     }));
+    const bulkButton = $('#portal-bulk-delete', container);
+    if (bulkButton) {
+        const checkboxes = $$('[data-select-record]', container);
+        const sync = () => {
+            const count = checkboxes.filter((box) => box.checked).length;
+            bulkButton.disabled = count === 0 || state.portalMutationBusy;
+            bulkButton.textContent = count ? `선택한 기록 ${count}건 삭제` : '선택한 기록 삭제';
+        };
+        checkboxes.forEach((box) => box.addEventListener('change', sync));
+        bulkButton.addEventListener('click', () => deleteSelectedPortalRecords(
+            checkboxes.filter((box) => box.checked).map((box) => records[Number(box.dataset.selectRecord)])));
+        sync();
+    }
+}
+
+async function deleteSelectedPortalRecords(selected) {
+    if (state.portalMutationBusy || !selected.length) return;
+    const confirmed = await confirmAction({
+        title: '선택한 포털 일지 삭제',
+        message: `선택한 ${selected.length}건을 학교 포털에서 실제로 삭제합니다. 되돌릴 수 없습니다.`,
+        details: selected.map((record) => `${formatPortalDate(record.date)} ${displayTime(record.start)}~${displayTime(record.end)} · ${record.content || '근무내용 없음'}`),
+        confirmLabel: `${selected.length}건 실제 삭제`, destructive: true
+    });
+    if (!confirmed) return;
+    state.portalMutationBusy = true;
+    let done = 0;
+    try {
+        // Reuse the verified single-record deletion for each item so every delete is re-checked.
+        for (const record of selected) {
+            const year = Number(record.date.slice(0, 4));
+            const month = Number(record.date.slice(4, 6));
+            toast(`포털 일지 삭제 중 (${done + 1}/${selected.length})…`, 'info');
+            await api(`/api/portal-records/${year}/${month}/mutate`, { method: 'POST', body: {
+                operation: 'delete', record, confirmed: true
+            } });
+            done += 1;
+        }
+        toast(`선택한 ${done}건을 삭제하고 재조회 검증했습니다.`, 'success');
+    } catch (error) {
+        toast(`${done}건 삭제 후 중단했습니다: ${error.message}`, 'error');
+    } finally {
+        state.portalMutationBusy = false;
+        await loadPortalSnapshot();
+        await loadJobs();
+    }
 }
 
 function openPortalRecordDialog(record, operation) {
@@ -1078,9 +1146,15 @@ async function savePortalCredential(event) {
     setButtonBusy(submit, true, '로그인 확인 중...');
     controls.forEach(([control]) => { control.disabled = true; });
     try {
+        // Pasted ids/passwords often carry stray leading/trailing spaces. Strip them and
+        // show the cleaned value so the field matches what is actually sent.
+        const portalId = $('#portal-id').value.trim();
+        const portalPassword = $('#portal-password').value.trim();
+        $('#portal-id').value = portalId;
+        $('#portal-password').value = portalPassword;
         state.portalCredential = await api('/api/portal-credentials', {
             method: 'PUT',
-            body: { portalId: $('#portal-id').value, portalPassword: $('#portal-password').value }
+            body: { portalId, portalPassword }
         });
         updatePortalSummary();
         $('#portal-form').reset();
@@ -1483,17 +1557,52 @@ async function loadAdminUsers() {
                 <option value="user" ${user.role === 'user' ? 'selected' : ''}>일반 사용자</option>
                 <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>관리자</option>
             </select>
-            <button type="button" ${user.id === state.user.id ? 'disabled' : ''}>${user.isActive ? '비활성화' : '활성화'}</button>
+            <button type="button" data-action="toggle-active" ${user.id === state.user.id ? 'disabled' : ''}>${user.isActive ? '비활성화' : '활성화'}</button>
+            <button type="button" class="text-button" data-action="reset-password">비밀번호 변경</button>
+            <form class="admin-password-form" hidden>
+                <input type="password" autocomplete="new-password" minlength="10" maxlength="128" placeholder="새 비밀번호 (10자 이상)" required>
+                <button type="submit" class="button button-quiet">저장</button>
+                <button type="button" class="text-button" data-action="cancel-password">취소</button>
+            </form>
         </article>`).join('');
     $$('.admin-user').forEach((row) => {
         const id = Number(row.dataset.userId);
         const select = $('select', row);
+        const passwordForm = $('.admin-password-form', row);
         select.addEventListener('change', () => updateAdminUser(id, { role: select.value }));
-        $('button', row).addEventListener('click', () => {
+        $('[data-action="toggle-active"]', row).addEventListener('click', () => {
             const isCurrentlyActive = $('small', row).textContent.includes('활성') && !$('small', row).textContent.includes('비활성');
             updateAdminUser(id, { isActive: !isCurrentlyActive });
         });
+        $('[data-action="reset-password"]', row).addEventListener('click', () => {
+            passwordForm.hidden = !passwordForm.hidden;
+            if (!passwordForm.hidden) $('input', passwordForm).focus();
+        });
+        $('[data-action="cancel-password"]', row).addEventListener('click', () => {
+            passwordForm.reset();
+            passwordForm.hidden = true;
+        });
+        passwordForm.addEventListener('submit', (event) => resetAdminPassword(event, id, passwordForm));
     });
+}
+
+async function resetAdminPassword(event, id, form) {
+    event.preventDefault();
+    const input = $('input', form);
+    const password = input.value;
+    if (password.length < 10) { toast('새 비밀번호는 10자 이상이어야 합니다.', 'error'); return; }
+    const submit = $('button[type="submit"]', form);
+    setButtonBusy(submit, true, '변경 중...');
+    try {
+        await api(`/api/admin/users/${id}/password`, { method: 'PUT', body: { password } });
+        form.reset();
+        form.hidden = true;
+        toast('비밀번호를 변경했습니다. 해당 사용자는 다시 로그인해야 합니다.', 'success');
+    } catch (error) {
+        toast(error.message, 'error');
+    } finally {
+        setButtonBusy(submit, false);
+    }
 }
 
 async function updateAdminUser(id, changes) {
@@ -1656,14 +1765,17 @@ function bindEvents() {
         setButtonBusy(button, true, state.authMode !== 'login' ? '계정 생성 중...' : '로그인 중...');
         try {
             const endpoint = `/api/${state.authMode}`;
+            const username = $('#username').value.trim();
             const payload = {
-                username: $('#username').value,
+                username,
                 password: $('#password').value,
                 passwordConfirmation: $('#password-confirm').value,
                 displayName: $('#display-name').value,
-                setupToken: $('#setup-token').value
+                setupToken: $('#setup-token').value,
+                remember: state.authMode === 'login' && $('#remember-session').checked
             };
             const data = await api(endpoint, { method: 'POST', body: payload });
+            if (state.authMode === 'login') persistUsername(username);
             state.user = data.user;
             state.csrfToken = data.csrfToken;
             state.portalCredential = data.portalCredential || { configured: false };

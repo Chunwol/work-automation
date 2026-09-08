@@ -19,11 +19,33 @@ function testConfig() {
         cookieSecure: false,
         trustProxy: false,
         sessionTtlMs: 60 * 60 * 1000,
+        rememberSessionTtlMs: 30 * 24 * 60 * 60 * 1000,
         automationConcurrency: 1,
         automationHeadless: true,
         nodeEnv: 'test'
     };
 }
+
+const sessionMaxAge = (response) => {
+    const cookie = (response.headers['set-cookie'] || []).find((value) => value.startsWith('worklog_session='));
+    return Number(/Max-Age=(\d+)/i.exec(cookie || '')?.[1] ?? NaN);
+};
+
+test('자동 로그인 keeps the session far longer, and a normal login stays short-lived', async t => {
+    const runtime = createApp(testConfig());
+    t.after(() => runtime.db.close());
+    const first = await request(runtime.app).post('/api/signup')
+        .send({ username: 'u1', displayName: 'U', password: 'password-123456', passwordConfirmation: 'password-123456' });
+    assert.equal(first.status, 201);
+
+    const normal = await request(runtime.app).post('/api/login').send({ username: 'u1', password: 'password-123456' });
+    const remembered = await request(runtime.app).post('/api/login').send({ username: 'u1', password: 'password-123456', remember: true });
+    assert.equal(normal.status, 200);
+    assert.equal(remembered.status, 200);
+    assert.ok(sessionMaxAge(normal) <= 60 * 60 + 5, 'normal login stays at the short TTL');
+    assert.ok(sessionMaxAge(remembered) >= 7 * 24 * 60 * 60, 'remember-me extends well beyond a day');
+    assert.ok(sessionMaxAge(remembered) > sessionMaxAge(normal));
+});
 
 test('HTML and frontend assets revalidate on reload and use a release-specific asset URL', async t => {
     const runtime = createApp({ ...testConfig(), nodeEnv: 'production', revision: 'release-test-123' });

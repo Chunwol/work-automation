@@ -132,7 +132,8 @@ test('a refused login is reported as a login failure, not as an expired session'
         const { pathname } = new URL(url);
         requests.push(`${init.method || 'GET'} ${pathname}`);
         if (pathname === '/login_real.jsp') return new Response(form);
-        if (pathname === '/proc/Login.do') return new Response('<html>로그인 화면</html>');
+        // A refused password lands back on the login page, which itself links to a password change.
+        if (pathname === '/proc/Login.do') return new Response(`<html>${form} 아이디 찾기 / 비밀번호 변경</html>`);
         // The portal answers a refused login with its own session message on the next command.
         return new Response(JSON.stringify({ dmMain: { errMessage: '로그인 세션이 종료되었습니다.' } }));
     } });
@@ -144,6 +145,21 @@ test('a refused login is reported as a login failure, not as an expired session'
         && !JSON.stringify(error.portalSteps).includes('wrong-password'));
     assert.ok(requests.includes('POST /proc/Login.do'));
     assert.ok(!/wrong-password/.test(JSON.stringify(requests)));
+    await client.close();
+});
+
+test('a blocking portal screen after login is named, not reported as an expired session', async () => {
+    const form = '<form id="loginFrm"><input name="user_id" value=""><input name="user_password" value=""></form>';
+    const client = new PortalHttpClient({ fetchImpl: async (url, init) => {
+        const { pathname } = new URL(url);
+        if (pathname === '/login_real.jsp') return new Response(form);
+        // No login form on this page, and it demands a password change: an interstitial, not a refusal.
+        if (pathname === '/proc/Login.do') return new Response('<html><body>비밀번호 변경 안내 · 사용기간이 만료되었습니다</body></html>');
+        return new Response(JSON.stringify({ dmMain: { errMessage: '로그인 세션이 종료되었습니다.' } }));
+    } });
+    await assert.rejects(client.login('id', 'right-password'), (error) => error.code === 'PORTAL_LOGIN_BLOCKED'
+        && /비밀번호 변경을 요구/.test(error.message) && /브라우저로/.test(error.message)
+        && !/세션이 만료/.test(error.message));
     await client.close();
 });
 

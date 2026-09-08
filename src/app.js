@@ -211,13 +211,15 @@ function createApp(config, overrides = {}) {
         next();
     });
 
-    const setSessionCookie = (res, token) => {
+    const sessionLifetime = (remember) => (remember && config.rememberSessionTtlMs) || config.sessionTtlMs;
+
+    const setSessionCookie = (res, token, remember = false) => {
         res.cookie(SESSION_COOKIE, token, {
             httpOnly: true,
             secure: config.cookieSecure,
             sameSite: 'strict',
             path: '/',
-            maxAge: config.sessionTtlMs
+            maxAge: sessionLifetime(remember)
         });
     };
 
@@ -230,12 +232,12 @@ function createApp(config, overrides = {}) {
         });
     };
 
-    const startSession = (res, userId) => {
+    const startSession = (res, userId, remember = false) => {
         const token = createSessionToken();
         const csrfToken = createCsrfToken();
-        const expiresAt = new Date(Date.now() + config.sessionTtlMs).toISOString();
+        const expiresAt = new Date(Date.now() + sessionLifetime(remember)).toISOString();
         db.createSession({ tokenHash: hashToken(token), userId, csrfToken, expiresAt });
-        setSessionCookie(res, token);
+        setSessionCookie(res, token, remember);
         return csrfToken;
     };
 
@@ -371,8 +373,8 @@ function createApp(config, overrides = {}) {
                 return res.status(401).json({ error: '아이디 또는 비밀번호를 확인해주세요.' });
             }
             db.touchLogin(userRow.id);
-            const csrfToken = startSession(res, userRow.id);
-            db.addAudit(userRow.id, 'login_succeeded', {}, req.ip);
+            const csrfToken = startSession(res, userRow.id, req.body?.remember === true);
+            db.addAudit(userRow.id, 'login_succeeded', { remember: req.body?.remember === true }, req.ip);
             return res.json({ user: db.getPublicUser(userRow.id), csrfToken, portalCredential: credentialSummary(userRow.id) });
         } catch (error) {
             next(error);
@@ -422,7 +424,8 @@ function createApp(config, overrides = {}) {
 
     app.put('/api/portal-credentials', requireAuth, requireCsrf, async (req, res, next) => {
         const portalId = String(req.body?.portalId || '').trim();
-        const portalPassword = String(req.body?.portalPassword || '');
+        // Pasted values often carry stray surrounding spaces; the portal has neither in the id nor password.
+        const portalPassword = String(req.body?.portalPassword || '').trim();
         if (portalId.length < 2 || portalId.length > 80 || portalPassword.length < 4 || portalPassword.length > 200) {
             return res.status(400).json({ error: '포털 아이디 또는 비밀번호 형식을 확인해주세요.' });
         }

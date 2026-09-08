@@ -85,6 +85,21 @@ test('a portal login refusal reaches the server log with the step that refused',
     assert.match(entry.message, /비밀번호 변경 요구나 계정 잠금/);
 });
 
+test('surrounding whitespace pasted into the id or password is stripped before verification and storage', async t => {
+    let seen;
+    const runtime = setup(t, async (options) => { seen = { ...options }; return true; });
+    const { agent, csrf, id } = await signup(runtime, 'trimmed');
+    const response = await agent.put('/api/portal-credentials').set('X-CSRF-Token', csrf)
+        .send({ portalId: '  chae042740 ', portalPassword: ' dahyun233812! ' });
+    assert.equal(response.status, 200);
+    // The portal is verified with the trimmed values, not the pasted ones.
+    assert.equal(seen.portalId, 'chae042740');
+    assert.equal(seen.portalPassword, 'dahyun233812!');
+    const stored = runtime.db.getPortalCredential(id);
+    assert.equal(decryptSecret(stored.portal_id_encrypted, runtime.masterKey, `portal:${id}:id`), 'chae042740');
+    assert.equal(decryptSecret(stored.portal_password_encrypted, runtime.masterKey, `portal:${id}:password`), 'dahyun233812!');
+});
+
 test('pending verification prevents duplicate save/delete/jobs and cannot save after logout', async t => {
     let resolve;
     let entered;

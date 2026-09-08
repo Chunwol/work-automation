@@ -103,8 +103,10 @@ function createConfig(overrides = {}) {
         automationHeadless: overrides.automationHeadless
             ?? parseBoolean(process.env.AUTOMATION_HEADLESS, true),
         portalRequestIntervalMs: overrides.portalRequestIntervalMs
-            ?? parseInteger(process.env.PORTAL_REQUEST_INTERVAL_MS, 500, 500, 60000),
+            ?? parseInteger(process.env.PORTAL_REQUEST_INTERVAL_MS, 200, 100, 60000),
         sessionTtlMs: overrides.sessionTtlMs || 12 * 60 * 60 * 1000,
+        // "자동 로그인" keeps the browser signed in for longer; opt-in per login.
+        rememberSessionTtlMs: overrides.rememberSessionTtlMs || 30 * 24 * 60 * 60 * 1000,
         publicDir: path.join(ROOT_DIR, 'public')
     };
 }

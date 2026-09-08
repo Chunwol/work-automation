@@ -22,10 +22,10 @@ test('production requires both an encryption key and first-setup token', () => {
     assert.equal(config.setupToken, 'one-time-setup-token');
 });
 
-test('portal request spacing defaults to 500ms and cannot be configured below it', () => {
+test('portal request spacing defaults to 200ms and is floored at 100ms', () => {
     const previous = process.env.PORTAL_REQUEST_INTERVAL_MS;
     try {
-        for (const [value, expected] of [['', 500], ['100', 500], ['1500', 1500]]) {
+        for (const [value, expected] of [['', 200], ['50', 100], ['200', 200], ['1500', 1500]]) {
             process.env.PORTAL_REQUEST_INTERVAL_MS = value;
             const config = createConfig({ nodeEnv: 'test', masterKey: crypto.randomBytes(32), dataDir: 'unused-in-test' });
             assert.equal(config.portalRequestIntervalMs, expected);

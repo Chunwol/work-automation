@@ -184,6 +184,9 @@ input, select, textarea { accent-color: var(--blue); }
 .auth-hint { margin-top: 22px; color: #7b817f; font-size: .82rem; line-height: 1.65; }
 .mobile-brand { display: none; }
 
+.login-options { display: flex; gap: 18px; flex-wrap: wrap; margin: -4px 2px 2px; }
+.login-option { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink-soft); font-size: .82rem; font-weight: 700; }
+.login-option input { width: 17px; height: 17px; accent-color: var(--blue); }
 .field { display: grid; gap: 8px; }
 .field > span:first-child { color: var(--ink-soft); font-size: .78rem; font-weight: 800; }
 .field input, .field textarea, .field select {
@@ -381,6 +384,12 @@ input, select, textarea { accent-color: var(--blue); }
 .day-portal-record > div { display: flex; justify-content: space-between; gap: 10px; font-size: .83rem; }
 .day-portal-record > div > span { font-size: .69rem; }
 .day-portal-record p { margin: 6px 0 0; font-size: .75rem; overflow-wrap: anywhere; }
+.day-portal-record-head { justify-content: flex-start !important; align-items: center; }
+.day-portal-record-head > div { flex: 1; display: flex; justify-content: space-between; gap: 10px; }
+.day-portal-record-head > div > span { font-size: .69rem; }
+.portal-record-select { width: 18px; height: 18px; accent-color: var(--blue); flex: none; margin: 0; cursor: pointer; }
+.portal-bulk-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
+#portal-bulk-delete { height: 38px; padding: 0 16px; font-size: .78rem; border-radius: 9px; cursor: pointer; }
 .portal-record-content { white-space: pre-wrap; }
 .portal-record-actions { margin-top: 10px; justify-content: flex-end !important; }
 .portal-delete-action { color: var(--red); }
@@ -576,7 +585,9 @@ body:has(dialog[open]) { overflow: hidden; }
 .create-user-card { display: grid; align-content: start; gap: 13px; padding: 18px; border-radius: 16px; background: var(--paper); }
 .create-user-card h3 { margin: 0 0 3px; font-weight: 750; }
 .admin-user-list { display: grid; gap: 8px; }
-.admin-user { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto; align-items: center; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; }
+.admin-user { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto auto; align-items: center; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; }
+.admin-password-form { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.admin-password-form input { flex: 1; min-width: 0; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font-size: .72rem; }
 .admin-user p { display: grid; margin: 0; }
 .admin-user strong { font-size: .8rem; }
 .admin-user small { color: #859093; font-size: .66rem; }

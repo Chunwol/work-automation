@@ -74,6 +74,10 @@
                         <span>비밀번호 확인</span>
                         <input id="password-confirm" type="password" autocomplete="new-password" maxlength="128" placeholder="비밀번호를 한 번 더 입력">
                     </label>
+                    <div id="login-options" class="login-options">
+                        <label class="login-option"><input id="remember-username" type="checkbox"><span>아이디 저장</span></label>
+                        <label class="login-option"><input id="remember-session" type="checkbox"><span>자동 로그인</span></label>
+                    </div>
                     <p id="auth-error" class="form-error" role="alert" hidden></p>
                     <button id="auth-submit" class="button button-primary button-wide" type="submit">로그인</button>
                 </form>
